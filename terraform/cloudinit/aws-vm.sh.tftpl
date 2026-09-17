@@ -1,0 +1,31 @@
+#!/bin/bash
+set -eux
+
+dnf install -y iperf3 traceroute tcpdump mtr nmap-ncat || true
+
+cat >/usr/local/bin/set-lab-mtu.sh <<'SCRIPT'
+#!/bin/bash
+# ExpressRoute supports a maximum TCP/UDP payload of 1400 bytes and does not
+# fragment, so clamp the interface MTU to avoid PMTU blackholes.
+IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+[ -n "$IFACE" ] && ip link set dev "$IFACE" mtu ${mtu}
+SCRIPT
+chmod 0755 /usr/local/bin/set-lab-mtu.sh
+
+cat >/etc/systemd/system/lab-mtu.service <<'UNIT'
+[Unit]
+Description=Clamp MTU for the Azure-AWS interconnect path
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/set-lab-mtu.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now lab-mtu.service

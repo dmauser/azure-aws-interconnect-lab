@@ -1,0 +1,37 @@
+# Terraform
+**/.terraform/*
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+tfplan
+*.tfplan
+*.log
+
+# Generated SSH keys - never commit
+ssh/
+*.pem
+*.ppk
+id_rsa*
+id_ed25519*
+
+# Discovery output (contains account/resource identifiers)
+discovery.json
+discovery/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/

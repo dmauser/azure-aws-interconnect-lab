@@ -1,0 +1,98 @@
+# Copy to terraform.tfvars and fill in.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# Easier: `pwsh scripts/00-configure.ps1` discovers all of this and writes
+# terraform.tfvars for you. terraform.tfvars is gitignored - never commit it.
+
+##############################################################################
+# REQUIRED - identity. No defaults, so the lab cannot silently deploy into
+# whatever subscription or account happens to be current.
+##############################################################################
+
+azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+aws_account_id        = "123456789012"
+
+# Optional: omit to let the azurerm provider infer the tenant from `az login`.
+# azure_tenant_id = "00000000-0000-0000-0000-000000000000"
+
+##############################################################################
+# REQUIRED - where the interconnect comes from
+##############################################################################
+
+# "existing" (default) - attach to a circuit + AWS interconnect you already own.
+# "create"             - Terraform builds the pair. The AWS side is BILLED
+#                        per port-hour; see the README before enabling.
+interconnect_mode = "existing"
+
+# --- interconnect_mode = "existing" only -----------------------------------
+# Discover both with: pwsh scripts/01-discover.ps1
+
+# Your Multicloud Interconnect circuit (SKU tier MultiCloud).
+express_route_circuit_id = "/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/expressRouteCircuits/..."
+
+# The Direct Connect Gateway the AWS interconnect is attached to. On AWS the
+# interconnect attach point is always a Direct Connect Gateway.
+dx_gateway_id = "REPLACE-ME"
+
+# --- interconnect_mode = "create" only -------------------------------------
+# Leave the two ids above unset and uncomment these instead.
+# interconnect_peering_location = "useast"
+# interconnect_bandwidth_mbps   = 1000   # 1 Gbps is the only preview option
+# dx_gateway_asn                = 64512
+# azure_mci_api_version         = "2025-09-01"  # earlier versions omit activationKey
+
+##############################################################################
+# REQUIRED - placement
+#
+# A MultiCloud circuit behaves as a LOCAL circuit: the gateway MUST sit in the
+# Azure region matching the circuit's peering location ("useast" -> eastus).
+# The VM lives in a peered spoke, which may be elsewhere.
+##############################################################################
+
+azure_hub_location = "eastus"
+azure_location     = "eastus2"
+
+##############################################################################
+# Optional overrides
+##############################################################################
+
+# prefix      = "mcilab"
+# aws_profile = "mcilab"
+# aws_region  = "us-east-1"
+
+# Demo mode: build both landing zones and the ExpressRoute gateway, but leave
+# the clouds unjoined so the link can be completed live. Flip to true and
+# re-apply to finish it.
+# create_interconnect = false
+
+# Pin your public IP instead of auto-detecting it via ifconfig.me.
+# my_public_ip = "203.0.113.4/32"
+
+# Reuse an existing key instead of generating a lab-scoped one.
+# ssh_public_key = "ssh-rsa AAAA..."
+
+# Daily auto-shutdown for the Azure VM (24h HHmm). null disables it.
+# azure_auto_shutdown_time     = "2000"
+# azure_auto_shutdown_timezone = "Central Standard Time"
+
+##############################################################################
+# Observability
+##############################################################################
+
+# Log Analytics workspace + Connection Monitor (continuous cross-cloud probe).
+# Works on any subscription. ~$0 at lab data volumes.
+# enable_observability = true
+
+# VNet flow logs -> storage account. OFF by default: flow logs write with the
+# storage ACCOUNT KEY, and many subscriptions deny that via Azure Policy
+# ("allowSharedKeyAccess = false"), which fails the apply with
+# KeyBasedAuthenticationNotPermitted. There is no Entra-only alternative.
+# Only enable this if shared-key access is permitted in your subscription.
+# enable_flow_logs = false
+
+# Traffic Analytics on top of the flow logs (requires enable_flow_logs).
+# enable_traffic_analytics = false
+
+# tags = {
+#   owner = "you"
+# }
