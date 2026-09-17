@@ -9,14 +9,14 @@
           <mxGeometry x="40" y="24" width="700" height="36" as="geometry" />
         </mxCell>
 
-        <mxCell id="azure" value="Microsoft Azure &#8212; subscription &lt;your-subscription&gt;" style="rounded=1;arcSize=4;html=1;whiteSpace=wrap;fillColor=#F5F9FD;strokeColor=#0078D4;strokeWidth=2;dashed=0;container=1;collapsible=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fontColor=#0078D4;" vertex="1" parent="1">
+        <mxCell id="azure" value="Microsoft Azure &#8212; your subscription" style="rounded=1;arcSize=4;html=1;whiteSpace=wrap;fillColor=#F5F9FD;strokeColor=#0078D4;strokeWidth=2;dashed=0;container=1;collapsible=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fontColor=#0078D4;" vertex="1" parent="1">
           <mxGeometry x="40" y="80" width="500" height="360" as="geometry" />
         </mxCell>
 
         <mxCell id="spoke" value="Spoke VNet &#8212; 10.100.1.0/24&#10;East US 2" style="rounded=1;arcSize=6;html=1;whiteSpace=wrap;fillColor=#FFFFFF;strokeColor=#5184F3;strokeWidth=1;dashed=3;container=1;collapsible=0;verticalAlign=top;align=center;spacingTop=6;fontSize=12;fontStyle=1;fontColor=#3B6CD4;" vertex="1" parent="azure">
           <mxGeometry x="30" y="70" width="200" height="260" as="geometry" />
         </mxCell>
-        <mxCell id="azvm" value="vm-mcilab-az&#10;10.100.1.4" style="image;aspect=fixed;html=1;points=[];align=center;fontSize=11;fontColor=#1F2937;verticalLabelPosition=bottom;verticalAlign=top;labelBackgroundColor=none;image=img/lib/azure2/compute/Virtual_Machine.svg;" vertex="1" parent="spoke">
+        <mxCell id="azvm" value="vm-mcilab-azure&#10;10.100.1.4" style="image;aspect=fixed;html=1;points=[];align=center;fontSize=11;fontColor=#1F2937;verticalLabelPosition=bottom;verticalAlign=top;labelBackgroundColor=none;image=img/lib/azure2/compute/Virtual_Machine.svg;" vertex="1" parent="spoke">
           <mxGeometry x="61" y="80" width="78" height="78" as="geometry" />
         </mxCell>
 
@@ -37,7 +37,7 @@
           <mxGeometry x="265" y="150" width="78" height="78" as="geometry" />
         </mxCell>
 
-        <mxCell id="aws" value="Amazon Web Services &#8212; account &lt;your-account-id&gt; &#183; us-east-1" style="rounded=1;arcSize=4;html=1;whiteSpace=wrap;fillColor=#FFF9F2;strokeColor=#ED7100;strokeWidth=2;dashed=0;container=1;collapsible=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fontColor=#C25A00;" vertex="1" parent="1">
+        <mxCell id="aws" value="Amazon Web Services &#8212; your account &#183; us-east-1" style="rounded=1;arcSize=4;html=1;whiteSpace=wrap;fillColor=#FFF9F2;strokeColor=#ED7100;strokeWidth=2;dashed=0;container=1;collapsible=0;verticalAlign=top;align=left;spacingLeft=14;spacingTop=4;fontSize=14;fontStyle=1;fontColor=#C25A00;" vertex="1" parent="1">
           <mxGeometry x="1020" y="80" width="620" height="360" as="geometry" />
         </mxCell>
         <mxCell id="dxgw" value="Direct Connect gateway&#10;Amazon-side ASN 64512" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.direct_connect;" vertex="1" parent="aws">
@@ -50,7 +50,7 @@
         <mxCell id="vpc" value="VPC &#8212; 10.200.0.0/16" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc2;strokeColor=#8C4FFF;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#8C4FFF;dashed=0;" vertex="1" parent="aws">
           <mxGeometry x="280" y="70" width="310" height="260" as="geometry" />
         </mxCell>
-        <mxCell id="awsvm" value="vm-mcilab-aws&#10;10.200.1.85&#10;subnet 10.200.1.0/24" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;" vertex="1" parent="vpc">
+        <mxCell id="awsvm" value="vm-mcilab-aws&#10;10.200.1.x&#10;subnet 10.200.1.0/24" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;" vertex="1" parent="vpc">
           <mxGeometry x="116" y="80" width="78" height="78" as="geometry" />
         </mxCell>
 

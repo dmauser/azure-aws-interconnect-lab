@@ -1,16 +1,69 @@
-# azure-aws-interconnect-lab
+<h1 align="center">Azure ⇄ AWS Multicloud Interconnect Lab</h1>
 
-Minimum-cost lab that proves private VM-to-VM connectivity between **Azure** and **AWS**
-over an existing **AWS Interconnect – multicloud** link.
+<p align="center">
+  Private, minimum-cost VM-to-VM connectivity between <b>Azure</b> and <b>AWS</b><br/>
+  over an <b>AWS Interconnect – multicloud</b> link paired with an
+  <b>Azure Multicloud Interconnect</b> circuit.
+</p>
 
-## End-to-end topology
+<p align="center">
+  <img alt="Terraform" src="https://img.shields.io/badge/Terraform-1.5%2B-7B42BC?logo=terraform&logoColor=white">
+  <img alt="Azure" src="https://img.shields.io/badge/Azure-ExpressRoute-0078D4?logo=microsoftazure&logoColor=white">
+  <img alt="AWS" src="https://img.shields.io/badge/AWS-Direct%20Connect-FF9900?logo=amazonaws&logoColor=white">
+  <img alt="Cost" src="https://img.shields.io/badge/cost-~%24161%2Fmo-brightgreen">
+  <img alt="Deploy time" src="https://img.shields.io/badge/deploy-~30%20min-blue">
+</p>
+
+---
+
+Two Linux VMs — one in each cloud — talk to each other over **private addresses only**,
+with no VPN, no public hops, and no BGP to configure. Terraform builds both landing zones
+and attaches them to the provider-managed interconnect; four commands take you from an
+empty subscription to a verified end-to-end path.
+
+| I want to… | Go to |
+|---|---|
+| Understand what the path looks like | [Architecture](#architecture) |
+| **Check I have everything I need** | **[Prerequisites checklist](#prerequisites-checklist)** |
+| Know what it costs | [Cost](#cost) |
+| **Bring the lab up** | **[Deploy](#deploy)** |
+| Prove it actually works | [Verify](#verify) |
+| Change region, prefix, or CIDRs | [Configuration](#configuration) |
+| Read the routing in detail | [docs/control-plane.md](docs/control-plane.md) |
+| See what went wrong along the way | [docs/lessons-learned.md](docs/lessons-learned.md) |
+
+---
+
+## Architecture
+
+### End-to-end topology
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/az-aws-interconnect-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/az-aws-interconnect.svg">
+    <img src="docs/az-aws-interconnect.svg" alt="Azure to AWS Multicloud Interconnect — end-to-end path: an Azure spoke VNet peers to a hub VNet holding an ExpressRoute gateway, which connects over a provider-managed interconnect to an AWS Direct Connect gateway, a virtual private gateway, and finally the AWS VPC." width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://app.diagrams.net/?url=https%3A%2F%2Fraw.githubusercontent.com%2Fdmauser%2Fazure-aws-interconnect-lab%2Fmain%2Fdocs%2Faz-aws-interconnect.drawio">
+    <img alt="Open in diagrams.net" src="https://img.shields.io/badge/Open%20in-diagrams.net-F08705?logo=diagramsdotnet&logoColor=white">
+  </a>
+  &nbsp;
+  <a href="docs/az-aws-interconnect.drawio">Download the editable <code>.drawio</code></a>
+</p>
+
+<details>
+<summary><b>Same topology as a Mermaid diagram</b> — renders inline, easier to diff in pull requests</summary>
 
 ```mermaid
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Segoe UI, Helvetica, Arial, sans-serif","lineColor":"#8C9AAB","edgeLabelBackground":"#EDF2F7"}}}%%
 flowchart TB
-    classDef azure  fill:#0B5CAB,stroke:#08375F,color:#FFFFFF
-    classDef aws    fill:#D97706,stroke:#7C4A02,color:#FFFFFF
-    classDef fabric fill:#3F3F46,stroke:#18181B,color:#FFFFFF
-    classDef net    fill:#EEF2F7,stroke:#64748B,color:#0F172A
+    classDef azure  fill:#1668C1,stroke:#7CC3FF,stroke-width:1.5px,color:#FFFFFF
+    classDef aws    fill:#C2660A,stroke:#FBBF24,stroke-width:1.5px,color:#FFFFFF
+    classDef fabric fill:#4B5563,stroke:#D1D5DB,stroke-width:1.5px,color:#FFFFFF
+    classDef net    fill:#334155,stroke:#94A3B8,stroke-width:1.5px,color:#E2E8F0
 
     subgraph AZURE["☁️ Microsoft Azure · your subscription"]
         direction TB
@@ -22,7 +75,7 @@ flowchart TB
     subgraph EDGE["🔗 Provider-managed interconnect · existing, or built by Terraform"]
         direction TB
         CKT["<b>Multicloud Interconnect circuit</b><br/>tier MultiCloud · peering location useast · azapi"]:::fabric
-        ICX["<b>AWS Interconnect – multicloud</b><br/>mcc-… · awscc"]:::fabric
+        ICX["<b>AWS Interconnect - multicloud</b><br/>mcc-… · awscc"]:::fabric
     end
 
     subgraph AWSC["🟧 Amazon Web Services · your account · us-east-1"]
@@ -45,187 +98,186 @@ flowchart TB
     AWSVM --- AWSSEC
     VGW --- RT
 
-    style AZURE fill:#F2F7FC,stroke:#0B5CAB,stroke-width:2px,color:#0B5CAB
-    style EDGE  fill:#F6F6F7,stroke:#3F3F46,stroke-width:2px,color:#3F3F46
-    style AWSC  fill:#FEF8F1,stroke:#D97706,stroke-width:2px,color:#B45309
+    style AZURE fill:#0F1B2D,stroke:#2E90FA,stroke-width:2px,color:#7CC3FF
+    style EDGE  fill:#1A1F27,stroke:#9CA3AF,stroke-width:2px,color:#D1D5DB
+    style AWSC  fill:#241A0C,stroke:#F59E0B,stroke-width:2px,color:#FBBF24
 ```
 
-The **Provider-managed interconnect** band is the transport, and you choose where it comes
-from with [`interconnect_mode`](#where-the-interconnect-comes-from--interconnect_mode):
-either you already own it (the default), or Terraform builds it. Either way, there is no
-BGP session, VLAN, or MD5 key to configure anywhere on this path — the provider runs the
-underlay and simply reflects prefixes between the two sides. Everything outside that band
-is always built by this repo.
+</details>
 
-An editable version with the official Azure and AWS icon sets is in
-[`docs/az-aws-interconnect.drawio`](docs/az-aws-interconnect.drawio) — open it at
-[app.diagrams.net](https://app.diagrams.net) or with the draw.io VS Code extension.
-
-### Why hub/spoke instead of one VNet
-
-Two hard constraints collide:
-
-1. `ER-AWS-Lab` is a **MultiCloud-tier** circuit, which the platform treats as a
-   **Local** ExpressRoute circuit. A Local circuit attaches only to the one designated
-   Azure region for its peering location — `useast` → **East US**. A gateway anywhere
-   else is rejected:
-
-   > `InvalidParameter: your circuit in useast cannot be connected to East US 2 on a
-   > Local circuit. A Local ExpressRoute circuit can only connect to a designated Azure
-   > region. Please upgrade the circuit to Standard SKU or Premium SKU.`
-
-   MultiCloud tier has **no Standard/Premium upgrade path**, so the gateway must be in
-   East US. (Verified the hard way: both `westus` and `eastus2` failed.)
-
-2. **The lab subscription could not deploy VMs in East US** — every VM SKU reported
-   `NotAvailableForSubscription` at `Location` scope. This is a per-subscription
-   restriction, so yours may differ; check with
-   `az vm list-skus -l eastus --size Standard_B1s --all -o table`.
-
-Gateways are not VMs, so the gateway is happy in East US. Only the VM has to move. The
-spoke reaches AWS through the hub's gateway via peering with `allow_gateway_transit` +
-`use_remote_gateways`, and ExpressRoute advertises the spoke prefix to AWS automatically.
-
-## The one thing to understand first
+### The one thing to understand first
 
 This is **not** a Megaport/Equinix cloud-router setup. It uses
 [AWS Interconnect – multicloud](https://docs.aws.amazon.com/interconnect/latest/userguide/what-is-interconnect.html)
 paired with
-[Azure Multicloud Interconnect (Preview)](https://learn.microsoft.com/azure/multicloud-interconnect/overview).
-
-- **There is no BGP session, VLAN, MD5 key, or 169.254.x.x peering to configure.**
-  AWS and Microsoft own the underlay (MACsec-encrypted, 4-link ECMP). The
-  activation-key exchange between the two clouds already happened.
-- **On AWS the interconnect attach point is *always* a Direct Connect Gateway.**
-  `aws interconnect list-connections` reports it as `attachPoint.directConnectGateway`.
-- **On Azure the attach point is a normal ExpressRoute gateway + connection.**
-- Azure MCI preview allows **exactly one gateway connection per interconnect**.
-
-This repo **never creates or destroys** `ER-AWS-Lab` or `mcc-EXAMPLE01`. It only
-attaches a VNet and a VPC to them.
-
-## Naming
-
-Every resource name derives from **`var.prefix`** (default `mcilab`):
-
-| | Name |
-|---|---|
-| Resource group | `rg-mcilab-azure` |
-| Azure VM | `vm-mcilab-azure` |
-| AWS VM | `vm-mcilab-aws` |
-| ER gateway | `ergw-mcilab` |
-| ER connection | `conn-mcilab-to-aws` |
-| Hub / spoke VNet | `vnet-mcilab-hub` / `vnet-mcilab-spoke` |
-| AWS route table | `rt-mcilab-vm` |
-| AWS VGW | `vgw-mcilab` |
-
-`mci` is Microsoft's own abbreviation for Multicloud Interconnect, and `-lab` marks the
-resources as disposable. The Azure VM is `-azure` rather than `-az` on purpose: `az` reads
-as *availability zone* the moment you are looking at the AWS half of the diagram.
-
-**The scripts do not hardcode any of these.** They read the
-[`resource_names`](terraform/outputs.tf) output instead:
-
-```powershell
-terraform output -json resource_names
-```
-
-That indirection exists because an earlier rename silently broke verification — the scripts
-kept querying names that no longer existed and cheerfully reported failures that were really
-lookups against the wrong resource. Changing `var.prefix` now propagates everywhere by
-itself.
-
-> [!NOTE]
-> `var.prefix` feeds the resource group name, so changing it on an existing deployment forces
-> a destroy/recreate of everything — roughly 45 minutes, dominated by the ExpressRoute gateway
-> (~25 min to build, ~9 min to delete, ~13 min for the connection). Fold a rename into a
-> teardown/rebuild rather than paying that cost on its own.
-
-## Where the interconnect comes from — `interconnect_mode`
-
-There are **two layers** here, and they're easy to conflate:
-
-| Layer | Resources | Controlled by |
-|---|---|---|
-| **The transport** — the Azure MCI circuit and its paired AWS Interconnect connection | `azapi_resource.mci`, `awscc_interconnect_connection.lab`, `aws_dx_gateway.lab` | `interconnect_mode` |
-| **The attachment** — this lab hooking onto that transport | `azurerm_virtual_network_gateway_connection.ergw`, `aws_dx_gateway_association.lab` | `create_interconnect` |
-
-### `interconnect_mode = "existing"` (default)
-
-Bring your own. You already own a Multicloud Interconnect circuit and its AWS
-counterpart; Terraform only attaches to them and **never creates or destroys
-them**. Supply `express_route_circuit_id` and `dx_gateway_id` —
-`scripts/00-configure` discovers both for you.
-
-This is the default deliberately: it provisions nothing chargeable on the AWS side.
-
-### `interconnect_mode = "create"`
-
-Terraform builds the pair itself, Azure-first:
-
-```
-azapi_resource.mci                 Azure creates the MultiCloud circuit and
-                                   mints an activationKey for it
-        │
-        │  activationKey  (a credential — see Security notes)
-        ▼
-awscc_interconnect_connection      AWS redeems the key, pairing the two clouds
-        │
-        │  attach_point
-        ▼
-aws_dx_gateway.lab                 where the interconnect lands in AWS
-```
-
-`terraform destroy` removes both sides again.
-
-> [!WARNING]
-> **`create` is not free.** Azure MCI carries no Azure service or egress charge
-> during preview, but the **AWS Interconnect connection is billed per port-hour**
-> at 1 Gbps. `scripts/00-configure` makes you confirm this explicitly before it
-> will write `interconnect_mode = "create"`.
-
-### Why two different providers are needed
-
-Neither mainstream provider can do this on its own:
-
-- **`azurerm` cannot create the Azure circuit.** Its `sku.tier` validator rejects
-  the value outright, before any API call is made:
-  ```
-  Error: expected sku.0.tier to be one of ["Basic" "Local" "Premium" "Standard"], got MultiCloud
-  ```
-  So the circuit is created through **`azapi`**, which talks to the raw ARM
-  surface where `MultiCloud_MeteredData` is perfectly valid.
-- **`hashicorp/aws` has no resource for AWS Interconnect – multicloud.** It is
-  exposed only through Cloud Control, so the AWS side uses **`awscc`**
-  (`AWS::Interconnect::Connection`).
+[Azure Multicloud Interconnect (Preview)](https://learn.microsoft.com/azure/multicloud-interconnect/overview),
+and the two cloud providers own everything in between.
 
 > [!IMPORTANT]
-> `azure_mci_api_version` must stay at **`2025-09-01` or later**. On `2025-05-01`
-> and earlier the circuit's `activationKey` property is *not returned at all* —
-> not empty, not an error, simply absent. The AWS side would then be handed a
-> null key and the pairing would fail with nothing obvious to point at.
+> **There is no BGP session, VLAN, MD5 key, or 169.254.x.x peering to configure anywhere
+> in this lab.** Every instinct carried over from a traditional ExpressRoute or Direct
+> Connect build is wrong here.
 
-## Existing resources this lab attaches to
+| | |
+|---|---|
+| **The underlay** | Owned by AWS and Microsoft — MACsec-encrypted, 4-link ECMP. The activation-key exchange between the clouds has already happened. |
+| **AWS attach point** | *Always* a Direct Connect Gateway. `aws interconnect list-connections` reports it as `attachPoint.directConnectGateway`. |
+| **Azure attach point** | A normal ExpressRoute gateway + connection. |
+| **Preview limit** | Exactly **one** gateway connection per interconnect. |
 
-In `interconnect_mode = "existing"`, these are yours to supply.
-`scripts/00-configure` discovers every one of them and writes them to
-`terraform.tfvars` (which is gitignored) — nothing below needs to be committed.
+### Why hub/spoke instead of one VNet
 
-| Side | Object | Variable | Discovered by |
-|---|---|---|---|
-| Azure | Subscription | `azure_subscription_id` | `az account list` picker |
-| Azure | MCI circuit (SKU `MultiCloud_MeteredData`) | `express_route_circuit_id` | filters `az network express-route list` to `sku.tier == MultiCloud` |
-| Azure | Peering location → gateway region | `azure_hub_location` | read off the circuit; see [lesson 1](#1-a-multicloud-circuit-is-a-local-circuit--the-gateway-region-is-not-negotiable) |
-| AWS | Account | `aws_account_id` | `aws sts get-caller-identity` |
-| AWS | Interconnect | — | `aws interconnect list-connections` |
-| AWS | Direct Connect Gateway (the interconnect's attach point) | `dx_gateway_id` | read from the interconnect's `attachPoint`, else a DXGW picker |
+Two hard constraints collide, and the hub/spoke shape is the only thing that satisfies
+both:
 
-## Cost
+<table>
+<tr><th width="50%">1 · The gateway must be in East US</th><th width="50%">2 · The VM could not be in East US</th></tr>
+<tr valign="top"><td>
+
+A **MultiCloud-tier** circuit is treated as a **Local** ExpressRoute circuit, and a Local
+circuit attaches only to the one Azure region designated for its peering location
+(`useast` → **East US**). Anything else is rejected:
+
+> `InvalidParameter: your circuit in useast cannot be connected to East US 2 on a Local
+> circuit. […] Please upgrade the circuit to Standard SKU or Premium SKU.`
+
+MultiCloud tier has **no Standard/Premium upgrade path**, so that advice is a dead end.
+
+</td><td>
+
+East US had **no VM capacity** for this subscription — all 1420 sizes were restricted at
+`type: Location`, so the VM had to land in **East US 2**.
+
+This one is subscription- and time-specific. Check yours:
+
+```powershell
+az vm list-skus -l eastus --size Standard_B1s --all -o table
+```
+
+If East US works for you, set `azure_location = "eastus"` and the two VNets collapse into
+one.
+
+</td></tr>
+</table>
+
+**Gateways are not virtual machines**, so the gateway is perfectly happy in East US — only
+the VM has to move. The spoke reaches AWS through the hub's gateway via peering with
+`allow_gateway_transit` + `use_remote_gateways`, and ExpressRoute advertises the spoke
+prefix to AWS automatically.
+
+<sub>Full detail in [lessons 1–3](docs/lessons-learned.md).</sub>
+
+### What this repo builds
+
+```
+                    built by this repo          never touched by this repo
+  Azure   ─────────────────────────────────    ──────────────────────────────
+          hub VNet + GatewaySubnet                 the MCI circuit *
+          ExpressRoute gateway (Standard)
+          ExpressRoute connection
+          spoke VNet + peering (both ways)
+          NSG, public IP, Ubuntu VM
+
+  AWS     VPC, subnet, IGW, route table           the AWS Interconnect *
+          Virtual Private Gateway                 the Direct Connect Gateway *
+          DXGW association
+          security group, EIP, AL2023 VM
+
+  * unless interconnect_mode = "create" — see Configuration
+```
+
+```
+.
+├── terraform/            one root module; Azure and AWS split into separate files
+│   ├── interconnect.tf   only used when interconnect_mode = "create"
+│   ├── observability.tf  Log Analytics + Connection Monitor (optional)
+│   └── cloudinit/        MTU 1400 clamp on both VMs
+├── scripts/              00-configure · 00-prereqs · 01-discover · 02-verify · 99-destroy
+│                         (.ps1 everywhere, .sh twins for configure/verify/destroy)
+└── docs/                 control-plane.md · lessons-learned.md · editable .drawio
+```
+
+---
+
+## Before you start
+
+> [!IMPORTANT]
+> **The lab will not run without all five items below.** `scripts/00-configure` checks
+> every one of them and stops with a specific message if something is missing — run it
+> first and let it tell you, rather than finding out 25 minutes into a gateway build.
+
+### Prerequisites checklist
+
+| ✔ | You need | How to get it / check it |
+|---|---|---|
+| 1 | **An Azure subscription** — and its subscription ID | `az login` then `az account show --query id -o tsv` |
+| 2 | **An AWS account** — and its 12-digit account ID | `aws sts get-caller-identity --query Account --output text` |
+| 3 | **An Azure Multicloud Interconnect circuit** (SKU `MultiCloud_MeteredData`), with **zero** gateway connections already on it | `az network express-route list --query "[?sku.tier=='MultiCloud'].{name:name,rg:resourceGroup,peering:serviceProviderProperties.peeringLocation}" -o table` |
+| 4 | **An AWS Interconnect – multicloud** connection, already paired with that circuit, plus the **Direct Connect Gateway** it attaches to | `aws interconnect list-connections --output json` → note `attachPoint.directConnectGateway` |
+| 5 | **Permissions in both clouds** | see [Permissions](#permissions) below |
+
+> [!NOTE]
+> **Items 3 and 4 already exist?** That is the default — `interconnect_mode = "existing"`,
+> and `scripts/00-configure` discovers both IDs for you, so you never type them by hand.
+>
+> **Don't have them yet?** Terraform can build both, Azure-first, with
+> `interconnect_mode = "create"`. Then you only need items 1, 2 and 5 — but read the
+> [billing warning](#where-the-interconnect-comes-from) first, because the AWS side is
+> charged per port-hour.
+
+Two more things, both handled for you:
+
+- **SSH key** — generated lab-scoped into `ssh/` by Terraform. Set `ssh_public_key` to
+  reuse your own instead.
+- **Your public IP** — auto-detected via `ifconfig.me` and pinned as a `/32` into both the
+  NSG and the AWS security group. Override with `my_public_ip` if detection is wrong (VPN,
+  CGNAT, split tunnel).
+
+> [!WARNING]
+> **Azure MCI is in preview and allows exactly one gateway connection per interconnect.**
+> If your circuit already has a connection, this lab cannot attach to it — delete the
+> existing connection first, or use a different circuit. `scripts/01-discover.ps1` checks
+> this explicitly.
+
+### Tooling
+
+| Tool | Install (Windows) | Install (macOS/Linux) |
+|---|---|---|
+| Azure CLI | `winget install Microsoft.AzureCLI` | `brew install azure-cli` |
+| Terraform ≥ 1.5 | `winget install Hashicorp.Terraform` | `brew install terraform` |
+| AWS CLI v2 | `winget install Amazon.AWSCLI` | `brew install awscli` |
+| `jq` (bash scripts only) | — | `brew install jq` |
+
+Run `pwsh scripts/00-prereqs.ps1` to verify all three are installed, on `PATH`, and
+signed in.
+
+### Permissions
+
+| Cloud | Needs |
+|---|---|
+| **Azure** | Contributor on the subscription, plus at least Network Contributor on the resource group holding the circuit. Same subscription, so no circuit authorization key is required. |
+| **AWS** | `ec2:*`, `directconnect:Describe*`, `directconnect:*DirectConnectGatewayAssociation`, and `interconnect:List*` for discovery. |
+
+<details>
+<summary>Signing in to AWS</summary>
+
+The scripts default to an AWS CLI profile named `mcilab`. Create it with either:
+
+```powershell
+pwsh scripts/aws-login.ps1          # prompts for an access key, never echoes the secret
+aws configure sso --profile mcilab  # or use SSO if your org requires it
+```
+
+Then pass `-AwsProfile <name>` / set `aws_profile` if you used a different name.
+
+</details>
+
+### Cost
 
 | Item | ~USD/mo |
 |---|---|
 | **Azure ExpressRoute gateway (`Standard`)** | **~140** |
-| Azure public IP (VM only — the ER gateway's is platform-managed and free) | ~4 |
+| Azure public IP (VM only — the gateway's is platform-managed and free) | ~4 |
 | Azure VM `Standard_B1s` + 30 GB `Standard_LRS` | ~9 |
 | AWS `t4g.nano` + 8 GB gp3 | ~4 |
 | AWS public IPv4 | ~4 |
@@ -233,429 +285,294 @@ In `interconnect_mode = "existing"`, these are yours to supply.
 | Azure MCI circuit + egress | **0** (free during preview) |
 | **Total** | **~161** |
 
-~85% is the ExpressRoute gateway, and `Standard` is already the cheapest
-ExpressRoute-capable SKU. **Run the teardown when you're done.**
+> [!WARNING]
+> **~85% of the cost is the ExpressRoute gateway**, and `Standard` is already the cheapest
+> ExpressRoute-capable SKU — there is no cheaper option. It bills hourly from the moment it
+> exists. **Run [the teardown](#step-4--tear-down) when you are done.**
 
-Cost choices baked in:
-- **VGW, not Transit Gateway** — DXGW→VGW association is free; a TGW attachment is ~$36/mo.
-- `Standard_LRS` disk, smallest burstable VM sizes, nightly auto-shutdown on the Azure VM.
-- Public IPs instead of Azure Bastion (~$140/mo) or AWS SSM VPC endpoints (~$21/mo).
+<details>
+<summary>Cost choices baked into the design</summary>
 
-## Prerequisites
+- **VGW, not Transit Gateway** — a DXGW→VGW association is free; a TGW attachment is
+  ~$36/mo plus per-GB. The trade-off is that a VGW cannot fan out to multiple VPCs.
+- **Public IPs, not Azure Bastion (~$140/mo) or AWS SSM VPC endpoints (~$21/mo)**, locked
+  to your detected `/32`.
+- `Standard_LRS` disks, smallest burstable sizes, nightly auto-shutdown on the Azure VM.
+- Flow logs are **off** by default — see [`enable_flow_logs`](#optional-features).
 
-| Tool | Install |
-|---|---|
-| Azure CLI | `winget install --id Microsoft.AzureCLI` |
-| Terraform | `winget install --id Hashicorp.Terraform` |
-| AWS CLI v2 | `winget install --id Amazon.AWSCLI` |
+</details>
 
-Permissions:
-- **Azure** — Contributor on the subscription, plus at least Network Contributor on
-  RG `ER-Circuits` to create the ExpressRoute connection. Same subscription, so no
-  circuit authorization key is needed.
-- **AWS** — `ec2:*`, `directconnect:Describe*`,
-  `directconnect:CreateDirectConnectGatewayAssociation` /
-  `DeleteDirectConnectGatewayAssociation`, and `interconnect:List*` for discovery.
+---
 
-## Runbook
+## Deploy
+
+> Total wall-clock: **~30 minutes**, almost all of it the ExpressRoute gateway.
+
+### Step 1 — Configure
+
+> First confirm you have everything on the
+> **[prerequisites checklist](#prerequisites-checklist)** — most notably an Azure
+> subscription, an AWS account, and (by default) an existing interconnect pair.
+
+One interactive script validates your tooling, signs you in to both clouds, picks the
+subscription and AWS profile, chooses the [interconnect mode](#where-the-interconnect-comes-from),
+discovers the circuit and DXGW, and writes `terraform.tfvars` for you. **You should not
+need to look up a single ID by hand.**
 
 ```powershell
-# 1. Configure everything interactively: validates tooling, signs in to both
-#    clouds, picks the subscription and AWS profile, chooses interconnect_mode,
-#    discovers the circuit + DXGW, and writes terraform.tfvars for you.
-pwsh scripts/00-configure.ps1
+pwsh scripts/00-configure.ps1          # bash: ./scripts/00-configure.sh
+```
 
-#    Non-interactive equivalents:
-#      pwsh scripts/00-configure.ps1 -InterconnectMode existing -NonInteractive
-#      pwsh scripts/00-configure.ps1 -InterconnectMode create            # billed
+<details>
+<summary>Non-interactive, or doing it by hand</summary>
 
-# 2. Build (~20-30 min, dominated by the ExpressRoute gateway)
+```powershell
+# Non-interactive
+pwsh scripts/00-configure.ps1 -InterconnectMode existing -NonInteractive
+pwsh scripts/00-configure.ps1 -InterconnectMode create              # billed, see below
+
+# Or step by step
+pwsh scripts/00-prereqs.ps1     # tooling + sign-in
+pwsh scripts/aws-login.ps1      # first run only: configure the AWS profile
+pwsh scripts/01-discover.ps1    # find the circuit and the interconnect's DXGW
+
+cd terraform
+cp terraform.tfvars.example terraform.tfvars    # then fill in the discovered ids
+```
+</details>
+
+### Step 2 — Build
+
+```powershell
 cd terraform
 terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
-
-# 3. Validate the private path
-cd ..
-pwsh scripts/02-verify.ps1
-
-# 4. Tear down (~10-20 min) - do not skip, the gateway is billed hourly
-pwsh scripts/99-destroy.ps1
 ```
 
-<details>
-<summary>Manual path, if you'd rather not use <code>00-configure</code></summary>
+⏱ **~20–30 min.** The ExpressRoute gateway dominates; timeouts are set to 90 minutes.
+This is normal — go and do something else.
+
+### Step 3 — Verify
 
 ```powershell
-pwsh scripts/00-prereqs.ps1     # tooling + sign-in
-pwsh scripts/aws-login.ps1      # first time only: configure the AWS profile
-pwsh scripts/01-discover.ps1    # circuit + the interconnect's DXGW
-
-cd terraform
-cp terraform.tfvars.example terraform.tfvars   # then set the discovered ids
+cd ..
+pwsh scripts/02-verify.ps1             # bash: ./scripts/02-verify.sh
 ```
-</details>
 
+See [Verify](#verify) for what it checks and what healthy output looks like.
 `terraform output next_steps` prints ready-to-paste SSH and test commands.
 
-## What "working" looks like
-
-1. `az network vnet-gateway list-learned-routes` on `ergw-mcilab` shows `10.200.0.0/16`.
-2. The AWS route table `rt-mcilab-vm` shows the Azure **spoke** prefix `10.100.1.0/24`
-   (and usually the hub's `10.100.0.0/24`) with origin `EnableVgwRoutePropagation`.
-   ExpressRoute advertises the individual VNet prefixes, **not** the `10.100.0.0/16`
-   supernet — the supernet only exists for the AWS security group rule.
-3. The DXGW association state is `associated`.
-4. Each VM pings the other's **private** IP.
-5. `traceroute` shows no public hops.
-
-`scripts/02-verify.ps1` checks all five.
-
-## Reading the control plane
-
-### How the two sides exchange prefixes
-
-```mermaid
-flowchart LR
-    classDef azure fill:#0B5CAB,stroke:#08375F,color:#FFFFFF
-    classDef aws   fill:#D97706,stroke:#7C4A02,color:#FFFFFF
-    classDef hop   fill:#F1F5F9,stroke:#64748B,color:#0F172A
-
-    AZ["<b>Azure</b><br/>10.100.0.0/24 hub<br/>10.100.1.0/24 spoke"]:::azure
-    ER["<b>ExpressRoute</b><br/>AS 12076"]:::hop
-    DX["<b>DXGW + VGW</b><br/>AS 64512"]:::hop
-    AW["<b>AWS VPC</b><br/>10.200.0.0/16"]:::aws
-
-    AZ -->|"originated, Origin = Network<br/>spoke included via gateway transit"| ER
-    ER -->|"reflected across the managed underlay"| DX
-    DX -->|"installed by propagating_vgws"| AW
-
-    AW -->|"VPC CIDR originated by the VGW"| DX
-    DX -->|"reflected across the managed underlay"| ER
-    ER -->|"Origin = EBgp, asPath 12076-64512<br/>4 ECMP next hops 10.100.0.4 – .7"| AZ
-```
-
-Both directions have to be independently true. The most common half-broken state is the
-top row working and the bottom row missing, or vice versa — ping then fails in one
-direction only, which is easy to misread as a firewall problem.
-
-### Why dump the learned routes at all
-
-A successful `terraform apply` proves the *resources* exist. It proves nothing about
-whether traffic can actually flow. Between "connection created" and "VMs can talk" sit
-several silent failure modes:
-
-- The ExpressRoute connection can be `Connected` while BGP has learned **nothing**.
-- The spoke VNet can be peered without `use_remote_gateways`, so its prefix is never
-  advertised to AWS — the Azure VM is then unreachable even though the hub works.
-- The VGW can be attached but route propagation disabled, so AWS has no return path.
-  **Connectivity fails asymmetrically**, which looks identical to a firewall problem from
-  inside the VM.
-
-The learned-route tables are the only place these show up *before* you start debugging
-`ping`. They also tell you the path is genuinely private — no public hop, no NAT.
-
-### Dump both sides
+### Step 4 — Tear down
 
 ```powershell
-# Azure: what the ExpressRoute gateway has learned
-az network vnet-gateway list-learned-routes `
-  --name ergw-mcilab --resource-group rg-mcilab-azure --output table
-
-# AWS: what the VPC route table has been given by the VGW
-aws ec2 describe-route-tables `
-  --filters "Name=tag:Name,Values=rt-mcilab-vm" `
-  --profile mcilab --output table
+pwsh scripts/99-destroy.ps1            # bash: ./scripts/99-destroy.sh
 ```
 
-`scripts/02-verify.ps1` runs both and asserts on them.
+⏱ **~10–20 min.** Do not skip this — the gateway is billed hourly. In
+`interconnect_mode = "existing"` the circuit and the AWS interconnect are left completely
+untouched.
 
-### Azure side — what a healthy result looks like
+---
 
-```
-network       nextHop    origin  asPath       sourcePeer
--------       -------    ------  ------       ----------
-10.100.0.0/24            Network              10.100.0.13
-10.100.1.0/24            Network              10.100.0.13
-10.200.0.0/16 10.100.0.5 EBgp    12076-64512  10.100.0.5
-10.200.0.0/16 10.100.0.6 EBgp    12076-64512  10.100.0.6
-10.200.0.0/16 10.100.0.4 EBgp    12076-64512  10.100.0.4
-10.200.0.0/16 10.100.0.7 EBgp    12076-64512  10.100.0.7
-```
+## Verify
 
-How to read it:
+`scripts/02-verify.ps1` checks five things, in this order:
 
-| Field | Meaning | Why it matters |
+| # | Check | Healthy result |
 |---|---|---|
-| `origin = Network` | Locally originated Azure prefixes | **Both `10.100.0.0/24` (hub) and `10.100.1.0/24` (spoke) must appear.** If the spoke is missing, `use_remote_gateways` didn't take and AWS will never learn the VM's subnet. This is the single most important line to check in a hub/spoke build. |
-| `origin = EBgp` | Learned from an external peer | Confirms real BGP with AWS, not a static route. |
-| `asPath = 12076-64512` | `12076` = Microsoft's ExpressRoute ASN, `64512` = the Direct Connect Gateway's Amazon-side ASN | End-to-end proof the prefix came **from the AWS DXGW through the Microsoft underlay**. A two-hop AS path with exactly these two numbers is the signature of a healthy multicloud interconnect. |
-| 4 rows for `10.200.0.0/16` | Four next-hops: `10.100.0.4` – `.7` | The interconnect's **4-link ECMP** underlay, one BGP session per link. Seeing fewer than four means links are down — traffic still flows, but you've lost redundancy and throughput headroom. |
-| `nextHop` inside `10.100.0.0/27` | The GatewaySubnet | The path stays on private addressing — no public hop. |
-
-Note the ASNs are *not* something this repo configures. `64512` was read from the
-existing DXGW during discovery; `12076` is Microsoft's. There is no BGP session to set up
-on either side — see [The one thing to understand first](#the-one-thing-to-understand-first).
-
-### AWS side — what a healthy result looks like
+| 1 | Azure gateway learned routes | `10.200.0.0/16` present, origin `EBgp` |
+| 2 | AWS route table propagation | Azure **spoke** `10.100.1.0/24` present, origin `EnableVgwRoutePropagation` |
+| 3 | DXGW association | state `associated` |
+| 4 | Data plane | each VM pings the other's **private** IP |
+| 5 | Path is private | `traceroute` shows no public hops |
 
 ```
-DestinationCidrBlock GatewayId             Origin                    State
--------------------- ---------             ------                    -----
-10.200.0.0/16        local                 CreateRouteTable          active
-0.0.0.0/0            igw-08b80331906ff1662 CreateRoute               active
-10.100.0.0/24        vgw-0abc123def4567890 EnableVgwRoutePropagation active
-10.100.1.0/24        vgw-0abc123def4567890 EnableVgwRoutePropagation active
+[ok] Azure is learning 10.200.0.0/16 from AWS.
+[ok] AWS route table has 10.100.1.0/24 (origin: EnableVgwRoutePropagation).
+[ok] at least one association is in state "associated".
+64 bytes from 10.200.1.219: icmp_seq=1 ttl=125 time=7.31 ms
+All checks passed - the private cross-cloud path is up.
 ```
 
-- `Origin = EnableVgwRoutePropagation` is the proof the prefixes arrived **via BGP**, not
-  as hand-written static routes. If you see `CreateRoute` for an Azure prefix, someone
-  added a static route and the test is invalid.
-- **Both Azure /24s must be present**, and `10.100.1.0/24` specifically — that's the
-  subnet the Azure VM lives in. `02-verify.ps1` asserts on the spoke prefix for exactly
-  this reason.
-- ExpressRoute advertises the **individual VNet prefixes**, never the `10.100.0.0/16`
-  supernet. The supernet exists only to keep the AWS security group rule simple.
+> [!NOTE]
+> ExpressRoute advertises the **individual VNet prefixes**, not the `10.100.0.0/16`
+> supernet. The supernet exists only so the AWS security group can allow the whole Azure
+> range in one rule.
 
-### Also worth checking
+**If only one direction works, or a prefix is missing** →
+[docs/control-plane.md](docs/control-plane.md) explains how the two sides exchange
+prefixes and how to read the output of each.
+
+---
+
+## Configuration
+
+### Where the interconnect comes from
+
+There are **two layers** here, and they are easy to conflate:
+
+| Layer | What it is | Controlled by |
+|---|---|---|
+| **Transport** | The Azure MCI circuit and its paired AWS Interconnect connection | `interconnect_mode` |
+| **Attachment** | This lab hooking onto that transport | `create_interconnect` |
+
+<table>
+<tr><th width="50%"><code>interconnect_mode = "existing"</code> — default</th><th width="50%"><code>interconnect_mode = "create"</code></th></tr>
+<tr valign="top"><td>
+
+Bring your own. You already own a Multicloud Interconnect circuit and its AWS
+counterpart; Terraform only attaches to them and **never creates or destroys them**.
+
+Supply `express_route_circuit_id` and `dx_gateway_id` — `scripts/00-configure` discovers
+both for you.
+
+This is the default deliberately: it provisions nothing chargeable on the AWS side.
+
+</td><td>
+
+Terraform builds the pair itself, Azure-first:
+
+```
+azapi_resource.mci             Azure mints an
+        │                      activationKey
+        ▼
+awscc_interconnect_connection  AWS redeems it,
+        │                      pairing the clouds
+        ▼
+aws_dx_gateway.lab             where it lands
+```
+
+`terraform destroy` removes both sides again.
+
+</td></tr>
+</table>
+
+> [!WARNING]
+> **`create` is not free.** Azure MCI carries no Azure service or egress charge during
+> preview, but the **AWS Interconnect connection is billed per port-hour** at 1 Gbps.
+> `scripts/00-configure` makes you confirm this explicitly before it will write
+> `interconnect_mode = "create"`.
+
+<details>
+<summary>Why this needs <code>azapi</code> and <code>awscc</code> rather than the mainstream providers</summary>
+
+Neither mainstream provider can do this on its own:
+
+- **`azurerm` cannot create the Azure circuit.** Its `sku.tier` validator rejects the
+  value outright, before any API call is made:
+  ```
+  Error: expected sku.0.tier to be one of ["Basic" "Local" "Premium" "Standard"], got MultiCloud
+  ```
+  So the circuit is created through **`azapi`**, which talks to the raw ARM surface where
+  `MultiCloud_MeteredData` is perfectly valid.
+- **`hashicorp/aws` has no resource for AWS Interconnect – multicloud.** It is exposed only
+  through Cloud Control, so the AWS side uses **`awscc`** (`AWS::Interconnect::Connection`).
+
+> [!IMPORTANT]
+> `azure_mci_api_version` must stay at **`2025-09-01` or later**. On `2025-05-01` and
+> earlier the circuit's `activationKey` property is *not returned at all* — not empty, not
+> an error, simply absent. The AWS side would be handed a null key and the pairing would
+> fail with nothing obvious to point at.
+
+</details>
+
+### Existing resources this lab attaches to
+
+In `interconnect_mode = "existing"` these are yours to supply. `scripts/00-configure`
+discovers every one of them and writes them to `terraform.tfvars`, which is gitignored —
+**nothing below ever needs to be committed.**
+
+| Side | Object | Variable | Discovered by |
+|---|---|---|---|
+| Azure | Subscription | `azure_subscription_id` | `az account list` picker |
+| Azure | MCI circuit (SKU `MultiCloud_MeteredData`) | `express_route_circuit_id` | filters `az network express-route list` to `sku.tier == MultiCloud` |
+| Azure | Peering location → gateway region | `azure_hub_location` | read off the circuit; see [lesson 1](docs/lessons-learned.md#1-a-multicloud-circuit-is-a-local-circuit--the-gateway-region-is-not-negotiable) |
+| AWS | Account | `aws_account_id` | `aws sts get-caller-identity` |
+| AWS | Interconnect | — | `aws interconnect list-connections` |
+| AWS | Direct Connect Gateway (the interconnect's attach point) | `dx_gateway_id` | read from the interconnect's `attachPoint`, else a DXGW picker |
+
+### Optional features
+
+| Variable | Default | What it does |
+|---|---|---|
+| `enable_observability` | `true` | Log Analytics workspace + Connection Monitor probing the cross-cloud path continuously. Works everywhere. |
+| `enable_flow_logs` | `false` | VNet flow logs → storage. **Off by default**: flow logs authenticate with the storage *account key*, and many subscriptions deny that by policy (`KeyBasedAuthenticationNotPermitted`). See [lesson 7](docs/lessons-learned.md#7-vnet-flow-logs-need-storage-shared-keys--which-policy-often-forbids). |
+| `create_interconnect` | `true` | Set `false` to build both landing zones and the gateway but leave the clouds **unjoined**, then flip to `true` and re-apply to complete the link live — useful for demos. |
+| `azure_auto_shutdown_time` | `"2000"` | Nightly auto-shutdown for the Azure VM. `null` disables. |
+| `my_public_ip` | auto | Detected via `ifconfig.me` and pinned into the NSG and security group. Set explicitly if detection is wrong. |
+
+All variables are documented in
+[`terraform/terraform.tfvars.example`](terraform/terraform.tfvars.example).
+
+### Naming
+
+Every resource name derives from **`var.prefix`** (default `mcilab`):
+
+| | Name | | Name |
+|---|---|---|---|
+| Resource group | `rg-mcilab-azure` | ER gateway | `ergw-mcilab` |
+| Azure VM | `vm-mcilab-azure` | ER connection | `conn-mcilab-to-aws` |
+| AWS VM | `vm-mcilab-aws` | AWS route table | `rt-mcilab-vm` |
+| Hub / spoke VNet | `vnet-mcilab-hub` / `-spoke` | AWS VGW | `vgw-mcilab` |
+
+`mci` is Microsoft's own abbreviation for Multicloud Interconnect, and `-lab` marks the
+resources as disposable. The Azure VM is `-azure` rather than `-az` on purpose: `az` reads
+as *availability zone* the moment you are looking at the AWS half of the diagram.
+
+**The scripts hardcode none of these** — they read the
+[`resource_names`](terraform/outputs.tf) output instead:
 
 ```powershell
-aws directconnect describe-direct-connect-gateway-associations `
-  --direct-connect-gateway-id 11111111-2222-3333-4444-555555555555 `
-  --profile mcilab --output table
+terraform output -json resource_names
 ```
 
-State must be `associated` (not `associating`), and `allowedPrefixes` must list the AWS
-VPC CIDR. A stuck `associating` is the usual reason Azure sees no AWS prefix.
+That indirection exists because an earlier rename silently broke verification: the scripts
+kept querying names that no longer existed and cheerfully reported failures that were
+really lookups against the wrong resource. Changing `var.prefix` now propagates everywhere
+by itself.
 
-## Lessons learned
+> [!NOTE]
+> `var.prefix` feeds the resource group name, so changing it on an existing deployment
+> forces a destroy/recreate of everything — roughly 45 minutes. Fold a rename into a
+> teardown/rebuild rather than paying that cost on its own.
 
-
-Everything below was learned by hitting it. Ordered by how much time it cost.
-
-### 1. A `MultiCloud` circuit is a **Local** circuit — the gateway region is not negotiable
-
-This was the single biggest time sink: **three gateway builds, ~75 minutes of pure
-provisioning**, before the real constraint surfaced.
-
-`ER-AWS-Lab` reports `sku.tier = MultiCloud`. Nothing in the circuit's properties says
-"Local". But the control plane evaluates it as a Local circuit, and a Local circuit
-attaches only to the **one designated Azure region** for its peering location
-(`useast` → **East US**). The truth only appears when the *connection* is created:
-
-```
-Status: "InvalidParameter"
-Message: "The creation of the virtual network gateway connection failed because your
-circuit in useast cannot be connected to East US 2 on a Local circuit. A Local
-ExpressRoute circuit can only connect to a designated Azure region. Please upgrade the
-circuit to Standard SKU or Premium SKU."
-```
-
-Three traps stacked here:
-
-- **The gateway succeeds in the wrong region.** `westus` and `eastus2` both built a
-  perfectly healthy ExpressRoute gateway in ~25 min, *then* failed at the connection.
-  You pay the full gateway build time before learning anything.
-- **The suggested fix is a dead end.** There is no Standard/Premium variant of the
-  MultiCloud tier, so "upgrade the circuit" is not actionable.
-- **The docs point the wrong way.** The
-  [MCI limits page](https://learn.microsoft.com/azure/multicloud-interconnect/availability-limits)
-  lists Australia East / East US / Germany West Central / West US as supported regions,
-  which reads as "any of these four works". For a *given* circuit, only the region
-  matching its peering location works.
-
-> **Rule of thumb:** for a Multicloud Interconnect circuit, put the ExpressRoute gateway
-> in the Azure region that matches the circuit's `serviceProviderProperties.peeringLocation`.
-> Don't infer it from the supported-regions list.
-
-### 2. Region restrictions can be subscription-wide, not just zonal
-
-`Standard_B1s` failed in `eastus` with `SkuNotAvailable`. Checking further showed **all
-1420 VM sizes** in `eastus` were blocked for this subscription — at `type: Location`, not
-`type: Zone`:
-
-```powershell
-az vm list-skus -l eastus --resource-type virtualMachines `
-  --query "[?name=='Standard_B1s'].restrictions"
-```
-
-`type: Zone` restrictions are routine and harmless for a non-zonal VM. `type: Location`
-means the subscription genuinely cannot deploy there — no quota request fixes it quickly.
-**Always check which type you're looking at.**
-
-### 3. The two constraints collide — hence hub/spoke
-
-Gateway *must* be in East US (lesson 1). VMs *cannot* be in East US (lesson 2).
-
-The resolution: **gateways are not virtual machines**, so the VM SKU restriction doesn't
-apply to them. Put the ExpressRoute gateway in an East US hub VNet with nothing else in
-it, put the VM in an East US 2 spoke, and peer them with `allow_gateway_transit` +
-`use_remote_gateways`. ExpressRoute then advertises the spoke prefix to AWS
-automatically. Cost delta is cross-region peering data transfer — pennies for a lab.
-
-This is worth remembering generally: **a workload region and a connectivity region do not
-have to be the same region.**
-
-### 4. Terraform state and Azure can desynchronise badly after a failed apply
-
-Several distinct failures, all from the same root cause — a partially-applied change:
-
-- **Deleting and recreating a resource group in one apply races itself.** The RG delete
-  returned "complete", Terraform immediately recreated it, and Azure's backend was still
-  tearing down the old RG — which deleted the newly created children. The tell was an RG
-  create taking 43s instead of ~2s. Newly created public IPs vanished with
-  `Provider produced inconsistent result after apply ... Root object was present, but now absent`.
-- **Subnet IDs are region-independent**, so when the VNet moved regions Terraform saw *no
-  diff* on `azurerm_subnet` and never recreated the subnets. The VNet came up with zero
-  subnets and the gateway failed with `InvalidResourceReference`.
-- **The VNet silently dropped out of state** across failed applies, so the next apply
-  tried to create it and hit `already exists ... needs to be imported`.
-
-What actually worked:
-
-```powershell
-terraform apply -refresh-only -auto-approve   # resync state with reality
-terraform import <addr> <resource-id>         # re-adopt orphans
-terraform plan -out=tfplan                    # save the plan
-terraform apply tfplan                        # apply the SAVED plan
-```
-
-**Apply a saved plan file after a failed run.** `terraform apply -auto-approve` re-plans
-from scratch, and if state drifted it will happily try to recreate things that exist.
-When a region changes, deleting the RG out-of-band and waiting for it to be *fully* gone
-(`az group exists` → `false`) is more reliable than letting one apply delete and recreate it.
-
-### 5. Azure injects `ip_tags` that force an infinite replacement loop
-
-This subscription stamps `ip_tags = { FirstPartyUsage = "/Unprivileged" }` onto public
-IPs. Terraform reads it as drift, tries to remove it, and `ip_tags` forces replacement —
-so **every** plan wants to replace the public IP. The destroy then fails anyway:
-
-```
-PublicIPAddressCannotBeDeleted: ... still allocated to resource .../nic-mcilab-vm
-```
-
-Fix:
-
-```hcl
-lifecycle {
-  ignore_changes = [ip_tags]
-}
-```
-
-### 6. A failed ExpressRoute connection leaves an orphan that blocks gateway deletion
-
-The failed `conn-mcilab-to-aws` was never written to Terraform state, but it *did* exist
-in Azure. Deleting the gateway then failed with `VirtualNetworkGatewayCannotBeDeleted`.
-Remove the orphan first:
-
-```powershell
-az network vpn-connection delete -g rg-mcilab-azure -n conn-mcilab-to-aws
-```
-
-Note the command is `vpn-connection` even for an ExpressRoute connection.
-
-### 7. VNet flow logs need storage **shared keys** — which policy often forbids
-
-The apply that built this lab succeeded on every resource on the critical path and failed
-on exactly one: `azurerm_storage_account.flowlogs`.
-
-```
-403 Key based authentication is not permitted on this storage account.
-KeyBasedAuthenticationNotPermitted
-```
-
-The subscription carries an Azure Policy that sets `allowSharedKeyAccess = false` on
-storage accounts. That is a good default — but **VNet flow logs write to the storage
-account with the account key**, and there is no Entra-ID-only alternative for the flow
-log writer. Microsoft-managed identity is not an option for this data path. So on a
-subscription with that policy, flow logs simply cannot be enabled to storage.
-
-Two things made this worse than it had to be:
-
-- **The failure is sticky.** The account is created before the provider tries to read
-  its queue properties, so the resource lands in state in a state Terraform then cannot
-  *refresh* — every later `plan` fails with the same 403 before it can produce a plan.
-  Recovering means `terraform state rm 'azurerm_storage_account.flowlogs[0]'` followed by
-  `az storage account delete`, not just flipping a variable.
-- **It took the wrong things down with it.** Flow logs were originally gated on the same
-  `enable_observability` switch as Log Analytics and Connection Monitor, so one blocked
-  resource poisoned the whole observability stack.
-
-The fix is a **separate switch**, defaulted off:
-
-```hcl
-enable_observability = true   # Log Analytics + Connection Monitor  (works everywhere)
-enable_flow_logs     = false  # VNet flow logs -> storage           (needs shared keys)
-```
-
-Connection Monitor is the better signal for this lab anyway: it measures the actual
-cross-cloud path continuously, whereas flow logs only record that packets happened.
-
-> **Check before you enable it:**
-> `az policy assignment list --query "[?contains(displayName,'shared key')]"`, or simply
-> try `az storage account create ... --allow-shared-key-access true` and see if it is denied.
-
-### 8. Small things that still cost real time
-
-| Trap | Reality |
-|---|---|
-| `aws ... -o json` | **AWS CLI needs `--output json`.** `-o` is Azure-CLI-only and fails with `Unknown options: -o, json`. Cost the most debugging per character of any item here. |
-| `aws interconnect list-connections` field names | Returns `id`, not `name` or `connectionId`. The attach point is `attachPoint.directConnectGateway`. |
-| `terraform destroy -target=azurerm_x.y` in PowerShell | PowerShell mangles it into `-target=azurerm_x`. Quote the whole argument: `'-target=azurerm_x.y'`. |
-| ER gateway `public_ip_address_id` | Rejected by azurerm 4.x — ExpressRoute gateways get a platform-managed public IP. Also saves ~$4/mo. |
-| `aws_vpn_gateway_route_propagation` | Races VGW attachment and fails with `couldn't find resource`. Use `propagating_vgws = [...]` inline on `aws_route_table` instead. |
-| AWS security group naming | `name` cannot begin with `sg-`. The `Name` *tag* can. |
-| MTU | ExpressRoute caps TCP/UDP payload at 1400 bytes and does not fragment. Clamp both VMs to MTU 1400 and probe with `ping -M do -s 1372` (pass) / `-s 1373` (fail). |
-| `GatewaySubnet` | Never attach an NSG or a `0.0.0.0/0` UDR to it. |
-| Gateway timing | ~25 min to create, ~9 min to delete. Set `timeouts` generously and expect to wait. |
-
-### 9. What was right from the start
-
-Worth recording so it isn't re-litigated:
-
-- **No BGP, VLAN, MD5, or 169.254.x.x peering anywhere.** The managed interconnect owns
-  the underlay. Every instinct from a Megaport/Equinix ExpressRoute build is wrong here.
-- **The AWS attach point is always a Direct Connect Gateway**, already created and bound
-  to the interconnect. Reuse it; never try to create it.
-- **VGW over Transit Gateway** — DXGW→VGW association is free, a TGW attachment is ~$36/mo.
-- **Discovery before Terraform.** `01-discover.ps1` supplied the DXGW id, the circuit id
-  and the "zero existing gateway connections" check that the preview limit requires.
-
-## Gotchas quick reference
-
-- **MTU 1400** on both VMs; `lab-mtu.service` handles it.
-- **Never** put an NSG or `0.0.0.0/0` UDR on `GatewaySubnet`.
-- **The AWS prefix is learned, not static** — `propagating_vgws` on the VPC route table.
-- **The gateway must be in `eastus`; the VM must not be.** See
-  [Why hub/spoke](#why-hubspoke-instead-of-one-vnet).
-- **Your public IP is auto-detected** via `ifconfig.me` and pinned into the NSG and
-  security group. If it changes, re-run `terraform apply` or set `my_public_ip`.
-- **AWS CLI uses `--output json`, not `-o json`.**
-- **The ExpressRoute gateway takes ~25 min to create.** Timeouts are set to 90m.
-- **`enable_flow_logs` defaults to `false`** — flow logs require storage shared-key
-  access, which many subscriptions deny by policy. Log Analytics and Connection Monitor
-  are on a separate switch (`enable_observability`) and are unaffected.
+---
 
 ## Security notes
 
-- `terraform.tfvars`, `*.tfstate*`, and `ssh/` are gitignored.
-- The lab SSH key is generated by Terraform and therefore **stored in state**.
-  Acceptable for a throwaway lab with a local backend; do not copy this pattern.
-- **The interconnect activation key is a credential.** In
-  `interconnect_mode = "create"`, Azure mints an `activationKey` on the circuit;
-  redeeming it is what authorises pairing that circuit to an AWS account. It is
-  therefore:
-  - a `sensitive = true` output (`interconnect_activation_key`), so it is never
-    printed by `terraform apply` or by the helper scripts;
-  - present in `terraform.tfstate` like any other sensitive value, which is one
-    more reason state is gitignored;
-  - not to be pasted into chats, issues, or commit messages. Treat a leaked key
-    like a leaked token: destroy the circuit and create a new one.
-- The IAM user `<your-lab-iam-user>` has `AdministratorAccess`. Delete its access key and the
-  user itself when the lab is finished:
+- `terraform.tfvars`, `*.tfstate*`, and `ssh/` are gitignored. No account, tenant, or
+  resource identifier is committed anywhere in this repo.
+- The lab SSH key is generated by Terraform and therefore **stored in state**. Acceptable
+  for a throwaway lab with a local backend; do not copy this pattern into anything real.
+- **The interconnect activation key is a credential.** In `interconnect_mode = "create"`,
+  Azure mints an `activationKey` on the circuit, and redeeming it is what authorises
+  pairing that circuit to an AWS account. It is therefore:
+  - a `sensitive = true` output (`interconnect_activation_key`), never printed by
+    `terraform apply` or by the helper scripts;
+  - present in `terraform.tfstate` like any other sensitive value — one more reason state
+    is gitignored;
+  - **not** to be pasted into chats, issues, or commit messages. Treat a leaked key like a
+    leaked token: destroy the circuit and create a new one.
+- If you created a dedicated IAM user for the lab, delete its access key and the user when
+  you are finished:
   ```powershell
-  aws iam list-access-keys --user-name <your-lab-iam-user> --profile mcilab
+  aws iam list-access-keys  --user-name <your-lab-iam-user> --profile mcilab
   aws iam delete-access-key --user-name <your-lab-iam-user> --access-key-id <AKIA...> --profile mcilab
   ```
 
+---
+
+## Further reading
+
+| Document | What's in it |
+|---|---|
+| **[docs/control-plane.md](docs/control-plane.md)** | How ExpressRoute and the DXGW exchange prefixes, what a healthy `list-learned-routes` looks like on each side, and what to check when only one direction works. |
+| **[docs/lessons-learned.md](docs/lessons-learned.md)** | The nine things that cost real time: the Local-circuit region trap, East US capacity, state desynchronisation after a failed apply, the `ip_tags` replacement loop, orphaned ExpressRoute connections, the flow-logs shared-key policy — plus a gotchas quick reference. |
+| **[docs/az-aws-interconnect.drawio](docs/az-aws-interconnect.drawio)** | Editable diagram with the official Azure and AWS icon sets. |
+
+### External references
+
+- [AWS Interconnect – multicloud](https://docs.aws.amazon.com/interconnect/latest/userguide/what-is-interconnect.html)
+- [Azure Multicloud Interconnect (Preview)](https://learn.microsoft.com/azure/multicloud-interconnect/overview)
+- [Azure MCI availability and limits](https://learn.microsoft.com/azure/multicloud-interconnect/availability-limits)
