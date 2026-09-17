@@ -50,8 +50,6 @@ empty subscription to a verified end-to-end path.
   <a href="https://app.diagrams.net/?url=https%3A%2F%2Fraw.githubusercontent.com%2Fdmauser%2Fazure-aws-interconnect-lab%2Fmain%2Fdocs%2Faz-aws-interconnect.drawio">
     <img alt="Open in diagrams.net" src="https://img.shields.io/badge/Open%20in-diagrams.net-F08705?logo=diagramsdotnet&logoColor=white">
   </a>
-  &nbsp;
-  <a href="docs/az-aws-interconnect.drawio">Download the editable <code>.drawio</code></a>
 </p>
 
 <details>
