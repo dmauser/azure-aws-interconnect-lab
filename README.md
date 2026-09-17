@@ -190,7 +190,7 @@ prefix to AWS automatically.
 │   ├── interconnect.tf   only used when interconnect_mode = "create"
 │   ├── observability.tf  Log Analytics + Connection Monitor (optional)
 │   └── cloudinit/        MTU 1400 clamp on both VMs
-├── scripts/              00-configure · 00-prereqs · 01-discover · 02-verify · 99-destroy
+├── scripts/              00-configure · 00-prereqs · 01-discover · 02-verify · 04-routes · 99-destroy
 │                         (.ps1 everywhere, .sh twins for configure/verify/destroy)
 └── docs/                 control-plane.md · lessons-learned.md · editable .drawio
 ```
@@ -397,6 +397,38 @@ All checks passed - the private cross-cloud path is up.
 > ExpressRoute advertises the **individual VNet prefixes**, not the `10.100.0.0/16`
 > supernet. The supernet exists only so the AWS security group can allow the whole Azure
 > range in one rule.
+
+### Dumping every routing table
+
+`02-verify` answers *"is the path up?"*. When you need to see **what each device
+actually believes**, use the route dump instead — it is strictly read-only:
+
+```powershell
+pwsh scripts/04-routes.ps1                       # bash: ./scripts/04-routes.sh
+pwsh scripts/04-routes.ps1 -IncludeGuest         # also SSH for the kernel route tables
+pwsh scripts/04-routes.ps1 -Json | ConvertFrom-Json
+pwsh scripts/04-routes.ps1 -OutFile routes.txt   # keep a transcript
+```
+
+| # | Section | Answers |
+|---|---|---|
+| 1 | ER gateway **learned** routes | what Azure received from AWS |
+| 2 | BGP peer status | are the four sessions up, and how long |
+| 3 | ER gateway **advertised** routes | what Azure sent to AWS |
+| 4 | Effective routes on the VM NIC | what the Azure data plane actually uses |
+| 5 | VPC route table | what the AWS subnet uses |
+| 6 | VGW propagation | is AWS allowed to install the Azure prefixes |
+| 7 | DXGW association | state and `allowedPrefixes` filter |
+| 8 | Kernel routes on both VMs | with `-IncludeGuest`, incl. the 1400 MTU |
+
+> [!TIP]
+> Sections 2 and 3 are the ones `02-verify` never shows, and they are where
+> one-way failures hide. **If AWS cannot reach the Azure spoke, check section 3
+> first** — a missing `10.100.1.0/24` there means gateway transit on the hub/spoke
+> peering is not set up, which no amount of AWS-side debugging will reveal.
+
+Every section runs independently, so a failure in one still prints the rest — which is
+precisely what you need when the path is half-broken.
 
 **If only one direction works, or a prefix is missing** →
 [docs/control-plane.md](docs/control-plane.md) explains how the two sides exchange

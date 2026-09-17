@@ -65,6 +65,7 @@ where both are null.
 | `scripts/00-configure.ps1` / `.sh` | interactive setup: tooling, sign-in, mode choice, discovery, writes `terraform.tfvars` |
 | `scripts/01-discover.ps1` | **authoritative** — dumps circuit + interconnect + DXGW state to `discovery.json` |
 | `scripts/02-verify.ps1` | post-deploy: learned routes, propagation, DXGW state, ping/MTU |
+| `scripts/04-routes.ps1` / `.sh` | read-only routing dump on both ends, incl. advertised routes and BGP peer status |
 | `scripts/99-destroy.ps1` | teardown + confirms the ER gateway is gone |
 
 Azure and AWS stay in separate files in one root module so either side can be `-target`ed
@@ -124,6 +125,7 @@ pwsh scripts/aws-login.ps1       # stores the mcilab AWS profile
 pwsh scripts/01-discover.ps1     # ALWAYS re-run before changing gateway wiring
 cd terraform; terraform init; terraform plan -out=tfplan; terraform apply tfplan
 pwsh scripts/02-verify.ps1
+pwsh scripts/04-routes.ps1       # read-only routing dump when a direction looks broken
 pwsh scripts/99-destroy.ps1      # run when done - ~85% of cost is the ER gateway
 ```
 

@@ -62,6 +62,20 @@ aws ec2 describe-route-tables `
 
 `scripts/02-verify.ps1` runs both and asserts on them.
 
+For the **full picture** — including the two views neither command above shows, namely
+what Azure *advertises* and the state of the BGP sessions carrying it — use the
+dedicated read-only dump:
+
+```powershell
+pwsh scripts/04-routes.ps1                  # bash: ./scripts/04-routes.sh
+pwsh scripts/04-routes.ps1 -IncludeGuest    # plus the kernel route table on both VMs
+```
+
+It prints seven sections: learned routes, BGP peer status, advertised routes per peer,
+effective routes on the Azure NIC, the VPC route table, VGW propagation, and the DXGW
+association. Each section is independent, so a half-broken path still yields a complete
+report.
+
 ## Azure side — what a healthy result looks like
 
 ```
