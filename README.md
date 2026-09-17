@@ -6,53 +6,48 @@ over an existing **AWS Interconnect – multicloud** link.
 ## End-to-end topology
 
 ```mermaid
-flowchart LR
+flowchart TB
     classDef azure  fill:#0B5CAB,stroke:#08375F,color:#FFFFFF
     classDef aws    fill:#D97706,stroke:#7C4A02,color:#FFFFFF
     classDef fabric fill:#3F3F46,stroke:#18181B,color:#FFFFFF
     classDef net    fill:#EEF2F7,stroke:#64748B,color:#0F172A
 
-    subgraph AZURE["Microsoft Azure · your subscription"]
+    subgraph AZURE["☁️ Microsoft Azure · your subscription"]
         direction TB
-        subgraph SPOKE["Spoke VNet · vnet-mcilab-spoke · 10.100.1.0/24 · East US 2"]
-            AZVM["<b>vm-mcilab-azure</b><br/>Standard_B1s · Ubuntu 24.04<br/>10.100.1.4 · MTU 1400"]:::azure
-            AZSEC["nsg-mcilab-vm<br/>SSH from operator /32<br/>any from 10.200.0.0/16"]:::net
-        end
-        subgraph HUB["Hub VNet · vnet-mcilab-hub · 10.100.0.0/24 · East US"]
-            GWSUB["GatewaySubnet<br/>10.100.0.0/27"]:::net
-            ERGW["<b>ergw-mcilab</b><br/>ExpressRoute gateway · Standard SKU<br/>BGP peers 10.100.0.4 – .7"]:::azure
-        end
+        AZVM["<b>vm-mcilab-azure</b><br/>Standard_B1s · Ubuntu 24.04<br/>10.100.1.4 · MTU 1400<br/><i>spoke vnet-mcilab-spoke · 10.100.1.0/24 · East US 2</i>"]:::azure
+        ERGW["<b>ergw-mcilab</b><br/>ExpressRoute gateway · Standard SKU<br/>BGP peers 10.100.0.4 – .7<br/><i>hub vnet-mcilab-hub · GatewaySubnet 10.100.0.0/27 · East US</i>"]:::azure
+        AZSEC["nsg-mcilab-vm<br/>SSH from operator /32<br/>any from 10.200.0.0/16"]:::net
     end
 
-    subgraph EDGE["Provider-managed interconnect"]
+    subgraph EDGE["🔗 Provider-managed interconnect · existing, or built by Terraform"]
         direction TB
-        CKT["<b>Multicloud Interconnect circuit</b><br/>tier MultiCloud · peering location useast<br/>existing, or built by azapi"]:::fabric
-        UNDERLAY{{"Managed underlay<br/>4 x ECMP links · MACsec encrypted<br/>no VLAN · no BGP · no MD5 to configure"}}:::fabric
-        ICX["<b>AWS Interconnect – multicloud</b><br/>mcc-…<br/>existing, or built by awscc"]:::fabric
+        CKT["<b>Multicloud Interconnect circuit</b><br/>tier MultiCloud · peering location useast · azapi"]:::fabric
+        ICX["<b>AWS Interconnect – multicloud</b><br/>mcc-… · awscc"]:::fabric
     end
 
-    subgraph AWSC["Amazon Web Services · your account · us-east-1"]
+    subgraph AWSC["🟧 Amazon Web Services · your account · us-east-1"]
         direction TB
         DXGW["<b>Direct Connect gateway</b><br/>the interconnect attach point<br/>Amazon-side ASN 64512"]:::aws
         VGW["<b>Virtual private gateway</b><br/>free, vs. Transit Gateway at ~36 USD/mo"]:::aws
-        subgraph VPC["VPC · 10.200.0.0/16"]
-            RT["rt-mcilab-vm<br/>propagating_vgws enabled"]:::net
-            AWSSEC["sg mcilab-vm<br/>SSH from operator /32<br/>any from 10.100.0.0/16"]:::net
-            AWSVM["<b>vm-mcilab-aws</b><br/>t4g.nano · Amazon Linux 2023 arm64<br/>10.200.1.x · MTU 1400<br/>subnet 10.200.1.0/24"]:::aws
-        end
+        AWSVM["<b>vm-mcilab-aws</b><br/>t4g.nano · Amazon Linux 2023 arm64<br/>10.200.1.x · MTU 1400<br/><i>VPC 10.200.0.0/16 · subnet 10.200.1.0/24</i>"]:::aws
+        AWSSEC["sg mcilab-vm<br/>SSH from operator /32<br/>any from 10.100.0.0/16"]:::net
+        RT["rt-mcilab-vm<br/>propagating_vgws enabled"]:::net
     end
 
-    AZVM --- AZSEC
-    AZSEC ==>|"VNet peering<br/>allow_gateway_transit + use_remote_gateways"| GWSUB
-    GWSUB --- ERGW
-    ERGW ==>|"ExpressRoute connection<br/>conn-mcilab-to-aws"| CKT
-    CKT <==> UNDERLAY
-    UNDERLAY <==> ICX
-    ICX ==>|"DXGW association<br/>state = associated"| DXGW
+    AZVM ==>|"VNet peering · allow_gateway_transit + use_remote_gateways"| ERGW
+    ERGW ==>|"ExpressRoute connection · conn-mcilab-to-aws"| CKT
+    CKT <==>|"managed underlay · 4 x ECMP · MACsec<br/>no VLAN · no BGP · no MD5 to configure"| ICX
+    ICX ==>|"DXGW association · state = associated"| DXGW
     DXGW <==> VGW
-    VGW ==>|"route propagation"| RT
-    RT --- AWSSEC
-    AWSSEC --- AWSVM
+    VGW ==>|"route propagation"| AWSVM
+
+    AZVM --- AZSEC
+    AWSVM --- AWSSEC
+    VGW --- RT
+
+    style AZURE fill:#F2F7FC,stroke:#0B5CAB,stroke-width:2px,color:#0B5CAB
+    style EDGE  fill:#F6F6F7,stroke:#3F3F46,stroke-width:2px,color:#3F3F46
+    style AWSC  fill:#FEF8F1,stroke:#D97706,stroke-width:2px,color:#B45309
 ```
 
 The **Provider-managed interconnect** band is the transport, and you choose where it comes
