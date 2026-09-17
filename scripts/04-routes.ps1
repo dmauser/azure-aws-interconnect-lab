@@ -287,5 +287,22 @@ try {
     if ($Json) { $data | ConvertTo-Json -Depth 12 }
 }
 finally {
-    if ($OutFile) { Stop-Transcript | Out-Null }
+    if ($OutFile) {
+        Stop-Transcript | Out-Null
+
+        # Start-Transcript wraps the output in a header/footer banner that records the
+        # local username, machine name and full command line. These dumps get pasted
+        # into bug reports, so strip the banners and leave only the routing output -
+        # this also matches what 04-routes.sh writes via tee.
+        $content = @(Get-Content -LiteralPath $OutFile)
+        $banners = @(0..($content.Count - 1) | Where-Object { $content[$_] -match '^\*{10,}$' })
+        if ($banners.Count -ge 2) {
+            $first = $banners[1] + 1
+            $last  = if ($banners.Count -ge 3) { $banners[2] - 1 } else { $content.Count - 1 }
+            $body  = if ($last -ge $first) { $content[$first..$last] } else { @() }
+            while ($body.Count -and [string]::IsNullOrWhiteSpace($body[0]))  { $body = $body[1..($body.Count - 1)] }
+            while ($body.Count -and [string]::IsNullOrWhiteSpace($body[-1])) { $body = $body[0..($body.Count - 2)] }
+            Set-Content -LiteralPath $OutFile -Value $body
+        }
+    }
 }

@@ -192,7 +192,7 @@ prefix to AWS automatically.
 │   └── cloudinit/        MTU 1400 clamp on both VMs
 ├── scripts/              00-configure · 00-prereqs · 01-discover · 02-verify · 04-routes · 99-destroy
 │                         (.ps1 everywhere, .sh twins for configure/verify/destroy)
-└── docs/                 control-plane.md · lessons-learned.md · editable .drawio
+└── docs/                 control-plane.md · lessons-learned.md · sample-routes.txt · editable .drawio
 ```
 
 ---
@@ -410,6 +410,33 @@ pwsh scripts/04-routes.ps1 -Json | ConvertFrom-Json
 pwsh scripts/04-routes.ps1 -OutFile routes.txt   # keep a transcript
 ```
 
+📄 **Sample output → [`docs/sample-routes.txt`](docs/sample-routes.txt)** — a complete
+`-IncludeGuest` dump taken from a live deployment of this lab. Compare your run against
+it: every private address, BGP value and resource ID is verbatim, so a healthy lab should
+match it almost line for line.
+
+<details>
+<summary>The two lines that prove the interconnect is carrying traffic</summary>
+
+```text
+=== Azure 1/4  ExpressRoute gateway - LEARNED routes (inbound) ===
+
+network       origin  asPath      sourcePeer  nextHop    weight
+-------       ------  ------      ----------  -------    ------
+10.200.0.0/16 EBgp    12076-64512 10.100.0.4  10.100.0.4  32769   <- AWS prefix, learned over BGP
+
+=== AWS 1/3  VPC route table ===
+
+DestinationCidrBlock GatewayId             Origin                    State
+-------------------- ---------             ------                    -----
+10.100.1.0/24        vgw-048ddcbedd408ab16 EnableVgwRoutePropagation active   <- Azure prefix, propagated
+```
+
+`origin EBgp` on the Azure side and `EnableVgwRoutePropagation` on the AWS side are the
+two facts that distinguish a working interconnect from a merely *provisioned* one.
+
+</details>
+
 | # | Section | Answers |
 |---|---|---|
 | 1 | ER gateway **learned** routes | what Azure received from AWS |
@@ -429,6 +456,12 @@ pwsh scripts/04-routes.ps1 -OutFile routes.txt   # keep a transcript
 
 Every section runs independently, so a failure in one still prints the rest — which is
 precisely what you need when the path is half-broken.
+
+> [!NOTE]
+> `-OutFile` writes **only** the routing output. The PowerShell transcript banner — which
+> records your username, machine name and full command line — is stripped, so the file is
+> safe to paste into an issue. `routes.txt` is gitignored; the VM public IPs it contains
+> are redacted in the committed sample.
 
 **If only one direction works, or a prefix is missing** →
 [docs/control-plane.md](docs/control-plane.md) explains how the two sides exchange

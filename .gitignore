@@ -29,6 +29,10 @@ id_ed25519*
 discovery.json
 discovery/
 
+# Local route dumps from scripts/04-routes.* (contain live public IPs)
+routes.txt
+routes-*.txt
+
 # OS / editor
 .DS_Store
 Thumbs.db

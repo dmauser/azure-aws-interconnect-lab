@@ -1,0 +1,129 @@
+# Sample output of: scripts/04-routes.ps1 -IncludeGuest   (bash: ./scripts/04-routes.sh --include-guest)
+#
+# Captured from a live deployment of this lab. VM public IPs are redacted; every
+# private address, resource ID and BGP value is verbatim so the numbers line up
+# with the walkthrough in README.md.
+
+Routing dump  2026-09-17 18:31:17
+  gateway : ergw-mcilab (rg-mcilab-azure)
+  aws     : profile azmcix
+
+=== Azure 1/4  ExpressRoute gateway - LEARNED routes (inbound) ===
+
+network       origin  asPath      sourcePeer  nextHop    weight
+-------       ------  ------      ----------  -------    ------
+10.100.0.0/24 Network             10.100.0.12             32768
+10.100.1.0/24 Network             10.100.0.12             32768
+10.200.0.0/16 EBgp    12076-64512 10.100.0.4  10.100.0.4  32769
+10.200.0.0/16 EBgp    12076-64512 10.100.0.5  10.100.0.5  32769
+10.200.0.0/16 EBgp    12076-64512 10.100.0.7  10.100.0.7  32769
+10.200.0.0/16 EBgp    12076-64512 10.100.0.6  10.100.0.6  32769
+  origin Network = local VNet prefix; origin EBgp = learned across the interconnect.
+
+=== Azure 2/4  BGP peer status ===
+
+neighbor     asn state     connectedDuration routesReceived messagesSent messagesReceived
+--------     --- -----     ----------------- -------------- ------------ ----------------
+10.100.0.4 12076 Connected 02:01:52.3612164               1          283              263
+10.100.0.5 12076 Connected 02:01:52.4237181               1          280              261
+10.100.0.6 12076 Connected 02:01:45.9236075               1          281              261
+10.100.0.7 12076 Connected 02:01:51.6112032               1          282              261
+  A short connectedDuration means the session recently re-established.
+
+=== Azure 3/4  ExpressRoute gateway - ADVERTISED routes (outbound) ===
+  peer 10.100.0.4
+
+network       origin asPath nextHop
+-------       ------ ------ -------
+10.100.0.0/24 Igp    65515  10.100.0.13
+10.100.1.0/24 Igp    65515  10.100.0.13
+  peer 10.100.0.5
+
+network       origin asPath nextHop
+-------       ------ ------ -------
+10.100.0.0/24 Igp    65515  10.100.0.13
+10.100.1.0/24 Igp    65515  10.100.0.13
+  peer 10.100.0.6
+
+network       origin asPath nextHop
+-------       ------ ------ -------
+10.100.0.0/24 Igp    65515  10.100.0.13
+10.100.1.0/24 Igp    65515  10.100.0.13
+  peer 10.100.0.7
+
+network       origin asPath nextHop
+-------       ------ ------ -------
+10.100.0.0/24 Igp    65515  10.100.0.12
+10.100.1.0/24 Igp    65515  10.100.0.12
+
+=== Azure 4/4  Effective routes on the VM NIC (data plane) ===
+
+source                state  addressPrefix  nextHopType           nextHopIp
+------                -----  -------------  -----------           ---------
+Default               Active 10.100.1.0/24  VnetLocal             
+VirtualNetworkGateway Active 10.200.0.0/16  VirtualNetworkGateway 10.25.55.200,10.25.55.208,10.7.42.120,10.7.42.128
+Default               Active 0.0.0.0/0      Internet              
+Default               Active 10.0.0.0/8     None                  
+Default               Active 127.0.0.0/8    None                  
+Default               Active 100.64.0.0/10  None                  
+Default               Active 172.16.0.0/12  None                  
+Default               Active 25.176.0.0/13  None                  
+Default               Active 25.152.0.0/14  None                  
+Default               Active 25.184.0.0/14  None                  
+Default               Active 25.4.0.0/14    None                  
+Default               Active 25.148.0.0/15  None                  
+Default               Active 198.18.0.0/15  None                  
+Default               Active 25.150.0.0/16  None                  
+Default               Active 25.156.0.0/16  None                  
+Default               Active 25.159.0.0/16  None                  
+Default               Active 40.109.0.0/16  None                  
+Default               Active 192.168.0.0/16 None                  
+Default               Active 104.147.0.0/16 None                  
+Default               Active 157.59.0.0/16  None                  
+Default               Active 40.108.0.0/17  None                  
+Default               Active 104.146.0.0/17 None                  
+Default               Active 23.103.0.0/18  None                  
+Default               Active 20.35.252.0/22 None                  
+Default               Active 10.100.0.0/24  VNetGlobalPeering
+  nextHopType VirtualNetworkGateway on the AWS prefix is the one that matters.
+
+=== AWS 1/3  VPC route table ===
+  rtb-012e63b472acb8f10
+
+DestinationCidrBlock GatewayId             Origin                    State
+-------------------- ---------             ------                    -----
+10.200.0.0/16        local                 CreateRouteTable          active
+0.0.0.0/0            igw-032514f36f0dd72a4 CreateRoute               active
+10.100.0.0/24        vgw-048ddcbedd408ab16 EnableVgwRoutePropagation active
+10.100.1.0/24        vgw-048ddcbedd408ab16 EnableVgwRoutePropagation active
+  Origin EnableVgwRoutePropagation = learned from Azure across the interconnect.
+
+=== AWS 2/3  Virtual private gateway propagation ===
+
+GatewayId
+---------
+vgw-048ddcbedd408ab16
+
+=== AWS 3/3  Direct Connect gateway association ===
+
+state      associatedGw          type                  region    allowedPrefixes
+-----      ------------          ----                  ------    ---------------
+associated vgw-048ddcbedd408ab16 virtualPrivateGateway us-east-1 10.200.0.0/16
+  allowedPrefixes filters what AWS accepts toward the DXGW; empty means no filter.
+
+=== Guest  kernel routing tables ===
+  azure VM (<azure-vm-public-ip>)
+    default via 10.100.1.1 dev eth0 proto dhcp src 10.100.1.4 metric 100
+    10.100.1.0/24 dev eth0 proto kernel scope link src 10.100.1.4 metric 100
+    10.100.1.1 dev eth0 proto dhcp scope link src 10.100.1.4 metric 100
+    168.63.129.16 via 10.100.1.1 dev eth0 proto dhcp src 10.100.1.4 metric 100
+    169.254.169.254 via 10.100.1.1 dev eth0 proto dhcp src 10.100.1.4 metric 100
+    --- mtu ---
+    2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1400 qdisc mq state UP mode DEFAULT group default qlen 1000
+  aws VM (<aws-vm-public-ip>)
+    default via 10.200.1.1 dev ens5 proto dhcp src 10.200.1.219 metric 512
+    10.200.0.2 via 10.200.1.1 dev ens5 proto dhcp src 10.200.1.219 metric 512
+    10.200.1.0/24 dev ens5 proto kernel scope link src 10.200.1.219 metric 512
+    10.200.1.1 dev ens5 proto dhcp scope link src 10.200.1.219 metric 512
+    --- mtu ---
+    2: ens5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1400 qdisc mq state UP mode DEFAULT group default qlen 1000
