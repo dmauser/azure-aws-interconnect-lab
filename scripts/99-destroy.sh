@@ -199,6 +199,21 @@ if [[ "$rg_exists" == 'true' ]]; then
         exit 1
     fi
     Write-Ok "no virtual network gateways remain in $rg."
+
+    # The container group is a fraction of the gateway's cost, but it bills per
+    # second for as long as it exists, so a leftover one bills forever quietly.
+    cgs_json=$(az container list --resource-group "$rg" --subscription "$AZURE_SUBSCRIPTION" -o json 2>/dev/null || true)
+    cgs_count=$(jq 'length' <<<"${cgs_json:-[]}")
+    if ((cgs_count > 0)); then
+        printf '%s  [FAIL] %d container group(s) still exist in %s - STILL BILLING.%s\n' "$C_RED" "$cgs_count" "$rg" "$C_RESET"
+        jq -r '.[] | "         - \(.name)"' <<<"$cgs_json" |
+        while IFS= read -r group; do
+            printf '%s%s%s\n' "$C_RED" "$group" "$C_RESET"
+        done
+        exit 1
+    fi
+    Write-Ok "no container groups remain in $rg."
+
     Write-Warn "resource group $rg still exists."
 else
     Write-Ok "resource group $rg no longer exists."

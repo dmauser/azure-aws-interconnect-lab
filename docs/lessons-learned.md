@@ -80,6 +80,10 @@ different — which is exactly what forces the hub/spoke shape in lesson 3.
 > az vm list-skus -l eastus --size Standard_B1s --all -o table
 > ```
 
+**Re-verified later, when the latency probe was added:** still 1420 of 1420 SKUs
+restricted at `type: Location`. Months apart, same answer. Treat this as structural for
+this subscription, not as a transient blip worth retrying.
+
 ## 3. The two constraints collide — hence hub/spoke
 
 Gateway *must* be in East US (lesson 1). The VM *could not* be in East US (lesson 2).
@@ -94,7 +98,79 @@ for a lab.
 This is worth remembering generally: **a workload region and a connectivity region do not
 have to be the same region.**
 
-## 4. Terraform state and Azure can desynchronise badly after a failed apply
+## 4. The East US compute hunt: ACA inherits the VM capacity wall, App Service does not
+
+Adding the [latency probe](../README.md#latency-probe) needed **something that runs code
+in East US**, beside the ExpressRoute gateway, because the whole point was to measure the
+path from as close to the circuit as possible. Lesson 2 already ruled out a VM. The
+assumption was that some PaaS compute would sidestep a VM capacity restriction.
+
+**Two of the three candidates did not.** The order they were tried in, and what each
+actually said:
+
+| Candidate | Result | The signal |
+|---|---|---|
+| Another VM | Impossible | 1420/1420 SKUs restricted, `type: Location`. |
+| **Azure Container Apps** | **Blocked — capacity** | Environment creation runs for **~6 minutes**, then HTTP 400 `AKSCapacityHeavyUsage`: *"AKS is experiencing heavy usage in region eastus"*. |
+| **Azure App Service** | **Blocked — quota** | P0v3, B1 and S1 all fail immediately with *"Operation cannot be completed without additional quota … Current Limit (`<sku>` VMs): 0"*. |
+| **Azure Container Instances**, VNet-injected | **Works** | Deploys into a delegated subnet in the hub VNet and reaches the AWS private IP over ExpressRoute. |
+
+Three things here cost real time.
+
+**Container Apps is AKS underneath, so it inherits the VM capacity wall.** This was the
+genuine surprise. ACA presents as serverless PaaS with no node concept in the API, which
+strongly implies it is insulated from regional VM capacity. It is not — a managed
+environment is backed by an AKS cluster, and when the region cannot hand out compute, the
+environment cannot be created either. **If a region cannot give you a VM, assume it also
+cannot give you a Container Apps environment until proven otherwise.**
+
+The misleading part is the shape of the failure. It is not an instant rejection like a
+`SkuNotAvailable`; it spends **six minutes provisioning first**, which reads as success
+right up until it isn't. Two of those six-minute waits were spent assuming the first was
+a transient blip.
+
+**App Service failed for a completely different reason wearing similar clothes.** "Current
+Limit (`<sku>` VMs): 0" also mentions VMs and also blocks the deployment — but it is
+**quota**, not capacity. That distinction matters: unlike the VM and ACA cases, a quota
+request could in principle clear it. Read the noun in the error. `Current Limit … 0` is
+quota; `restrictions: [{type: Location}]` and `HeavyUsage` are capacity.
+
+**Container Instances with VNet injection was the one that worked**, and it brought its
+own constraints:
+
+- **`NET_RAW` is granted.** A raw ICMP socket opens successfully, so true ICMP ping works
+  from ACI. Unprivileged ICMP *datagram* sockets are denied — `ping_group_range` is not
+  set in the container's namespace — which is irrelevant once raw sockets are available,
+  but it will mislead you if you test with a `ping` binary that prefers the datagram path.
+- **The subnet must be delegated** to `Microsoft.ContainerInstance/containerGroups` before
+  the group will deploy, and once delegated it can hold nothing else.
+- **A VNet-injected container group gets a private IP only** — there is no public ingress.
+  Fine for a prober, which is why the collector and dashboard had to stay on the East US 2
+  VM. Microsoft also recommends a **/24 or larger** subnet and warns that smaller ones can
+  fail "subnet full"; this lab runs a `/27` for one 0.5-vCPU group and it is reliable, but
+  that is below the documented recommendation.
+- **ExpressRoute reachability worked first try** to the AWS EC2 private IP `10.200.1.219`.
+- **The first samples are garbage.** The very first probe from a freshly created container
+  group returned `No route to host`, and one early sample came back at **1636 ms** before
+  the numbers settled into the 3–4 ms band. VNet route programming takes a few seconds
+  after the group starts. This looks exactly like a broken path — it is not. **Discard
+  warmup samples**, or you are benchmarking Azure provisioning rather than the
+  interconnect.
+- **Docker Hub does not work from here.** Any `index.docker.io` pull fails with
+  `RegistryErrorResponse`. Microsoft documents this: anonymous Docker Hub pulls are
+  rate-limited and ACI's egress IPs are shared, so the limit is routinely already spent
+  before your pull lands. It is not a retry problem and not a tag problem — it is a
+  registry problem. The probe uses **`mcr.microsoft.com/azurelinux/base/python:3.12`**;
+  any `mcr.microsoft.com` image pulls without authentication. Wanting a specific Docker
+  Hub image means supplying registry credentials or mirroring into ACR, both of which cost
+  more than changing base image.
+
+> **The useful generalisation:** in a capacity-constrained region, rank compute by how
+> much VM it hides. VMs and AKS-backed services (ACA) fail on capacity; App Service fails
+> on quota; Container Instances got through. Test the cheapest candidate first and read
+> the error's noun before assuming the next one will behave differently.
+
+## 5. Terraform state and Azure can desynchronise badly after a failed apply
 
 Several distinct failures, all from the same root cause — a partially-applied change:
 
@@ -123,7 +199,7 @@ from scratch, and if state drifted it will happily try to recreate things that e
 When a region changes, deleting the RG out-of-band and waiting for it to be *fully* gone
 (`az group exists` → `false`) is more reliable than letting one apply delete and recreate it.
 
-## 5. Azure injects `ip_tags` that force an infinite replacement loop
+## 6. Azure injects `ip_tags` that force an infinite replacement loop
 
 This subscription stamps `ip_tags = { FirstPartyUsage = "/Unprivileged" }` onto public
 IPs. Terraform reads it as drift, tries to remove it, and `ip_tags` forces replacement —
@@ -141,7 +217,7 @@ lifecycle {
 }
 ```
 
-## 6. A failed ExpressRoute connection leaves an orphan that blocks gateway deletion
+## 7. A failed ExpressRoute connection leaves an orphan that blocks gateway deletion
 
 The failed `conn-mcilab-to-aws` was never written to Terraform state, but it *did* exist
 in Azure. Deleting the gateway then failed with `VirtualNetworkGatewayCannotBeDeleted`.
@@ -153,7 +229,7 @@ az network vpn-connection delete -g rg-mcilab-azure -n conn-mcilab-to-aws
 
 Note the command is `vpn-connection` even for an ExpressRoute connection.
 
-## 7. VNet flow logs need storage **shared keys** — which policy often forbids
+## 8. VNet flow logs need storage **shared keys** — which policy often forbids
 
 The apply that built this lab succeeded on every resource on the critical path and failed
 on exactly one: `azurerm_storage_account.flowlogs`.
@@ -194,7 +270,75 @@ cross-cloud path continuously, whereas flow logs only record that packets happen
 > `az policy assignment list --query "[?contains(displayName,'shared key')]"`, or simply
 > try `az storage account create ... --allow-shared-key-access true` and see if it is denied.
 
-## 8. Small things that still cost real time
+### Follow-up: the policy was Modify, not Deny — and a tag exempts it
+
+Re-testing later showed the control in this tenant is a **Modify**-effect policy, which
+makes it nastier than "denied":
+
+```powershell
+az storage account create ... --allow-shared-key-access true   # succeeds, exit code 0
+az storage account show ... --query allowSharedKeyAccess       # false
+```
+
+The create **succeeds** and is silently rewritten. `az deployment group validate` also
+returns `"error": null`, because there is nothing to deny. Neither the exit code nor an
+ARM validate will tell you anything is wrong — **only reading the property back does.**
+
+Tagging the account `SecurityControl = Ignore` exempts it from the policy. Measured
+side-by-side in `rg-mcilab-azure`, same command, same region, only the tag differing:
+
+| Storage account | Requested | `allowSharedKeyAccess` read back |
+|---|---|---|
+| untagged | `true` | **`false`** |
+| `SecurityControl=Ignore` | `true` | **`true`** |
+
+So `enable_flow_logs = true` is viable in this subscription, and
+`azurerm_storage_account.flowlogs` carries the tag plus an explicit
+`shared_access_key_enabled = true` so that a future `plan` shows drift if the exemption
+ever stops applying.
+
+Two caveats worth keeping:
+
+- **`SecurityControl: Ignore` is not a documented Azure feature.** It returns zero hits
+  across Microsoft Learn. It is a Microsoft-internal convention honoured by internal
+  policy definitions, so it is meaningless in a tenant that does not look for it — and it
+  does nothing at all against a *Deny*-effect implementation of the same control.
+- **It is an exemption from a security control**, appropriate for a throwaway lab and not
+  a pattern to carry into anything real.
+
+## 9. ExpressRoute FastPath is a dead end for this lab, twice over
+
+Once the [latency probe](../README.md#latency-probe) put a number on the region split —
+**~3.9 ms of RTT at p50, roughly half the total** — the obvious next question was whether
+ExpressRoute **FastPath** could claw it back. FastPath is exactly the right-shaped idea:
+it bypasses the ExpressRoute gateway in the data path, and "VNet peering over FastPath"
+specifically targets the spoke→hub→gateway detour this lab is forced into.
+
+It does not apply here, and it fails **two independent eligibility checks**, so there is
+no partial workaround:
+
+| Requirement | This lab | Verdict |
+|---|---|---|
+| Gateway SKU must be `UltraPerformance`, `ErGw3AZ`, `ErGwScale` ≥ 10 scale units, or a vWAN ER gateway ≥ 5 scale units | `ergw-mcilab` is **`Standard`** | ✗ |
+| **VNet peering over FastPath** requires **ExpressRoute Direct** | The circuit is a **provider** circuit (Multicloud Interconnect) | ✗ |
+
+The first is money: an `UltraPerformance` gateway is dramatically more expensive than
+`Standard`, and `Standard` is already ~85% of this lab's bill. The second cannot be bought
+at all — ExpressRoute Direct is a different product from a provider-managed circuit, and
+a Multicloud Interconnect circuit is by definition the latter.
+
+The misleading signal is the FastPath documentation itself: the feature matrix lists
+peering-over-FastPath as a supported scenario with no gateway-side caveat visible until
+you cross-read the ExpressRoute Direct column. It looks available, and it reads as a
+configuration flag, which is why it is worth writing down as closed.
+
+> **Do not re-propose FastPath as a latency fix for this topology.** If the 3.9 ms
+> matters, the lever is the region split (lesson 3), not the gateway — collapse hub and
+> spoke into one VNet on a subscription that can actually build a VM in the gateway
+> region. Source:
+> [About ExpressRoute FastPath](https://learn.microsoft.com/azure/expressroute/about-fastpath).
+
+## 10. Small things that still cost real time
 
 | Trap | Reality |
 |---|---|
@@ -207,8 +351,11 @@ cross-cloud path continuously, whereas flow logs only record that packets happen
 | MTU | ExpressRoute caps TCP/UDP payload at 1400 bytes and does not fragment. Clamp both VMs to MTU 1400 and probe with `ping -M do -s 1372` (pass) / `-s 1373` (fail). |
 | `GatewaySubnet` | Never attach an NSG or a `0.0.0.0/0` UDR to it. |
 | Gateway timing | ~25 min to create, ~9 min to delete. Set `timeouts` generously and expect to wait. |
+| ACI probe warmup | The **first** probe from a freshly created container group returns `No route to host`, and one early sample came back at **1636 ms**. VNet route programming takes a few seconds. Discard warmup samples or you are benchmarking Azure provisioning, not the interconnect. |
+| ACI images | Docker Hub fails with `RegistryErrorResponse`. Use `mcr.microsoft.com` — see lesson 4. |
+| ACI subnet | Must be delegated to `Microsoft.ContainerInstance/containerGroups`, and Microsoft recommends **/24 or larger**. A `/27` works for one small group but is below the documented recommendation. |
 
-## 9. What was right from the start
+## 11. What was right from the start
 
 Worth recording so it isn't re-litigated:
 
@@ -237,3 +384,14 @@ Worth recording so it isn't re-litigated:
 - **`enable_flow_logs` defaults to `false`** — flow logs require storage shared-key
   access, which many subscriptions deny by policy. Log Analytics and Connection Monitor
   are on a separate switch (`enable_observability`) and are unaffected.
+- **If a region cannot give you a VM, assume it cannot give you a Container Apps
+  environment either** — ACA is AKS-backed. It fails after ~6 minutes with
+  `AKSCapacityHeavyUsage`, not immediately.
+- **Read the noun in the error.** `Current Limit … 0` is *quota* (App Service) and can be
+  raised; `type: Location` and `HeavyUsage` are *capacity* and cannot.
+- **ACI images must come from `mcr.microsoft.com`.** Docker Hub pulls fail with
+  `RegistryErrorResponse`.
+- **Discard the ACI probe's warmup samples** — the first one fails outright and an early
+  one hit 1636 ms before settling.
+- **ExpressRoute FastPath is not available here** — wrong gateway SKU *and* a provider
+  circuit rather than ExpressRoute Direct. Don't re-propose it as a latency fix.

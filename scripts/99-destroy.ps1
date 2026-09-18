@@ -36,6 +36,7 @@ if ($tf -and $tf.resource_names) {
     $names            = $tf.resource_names.value
     $rg               = $names.resource_group
     $vgwName          = "vgw-$($names.prefix)"
+    $probeGroup       = $names.probe_container_group
     $interconnectMode = $tf.interconnect_mode.value
     if (-not $AwsProfile)        { $AwsProfile        = $tf.aws_profile.value }
     if (-not $AzureSubscription) { $AzureSubscription = $tf.azure_subscription_id.value }
@@ -45,6 +46,7 @@ else {
     $prefix           = Read-Host 'Resource name prefix (e.g. mcilab)'
     $rg               = "rg-$prefix-azure"
     $vgwName          = "vgw-$prefix"
+    $probeGroup       = "ci-$prefix-probe"
     $interconnectMode = 'existing'
     if (-not $AwsProfile)        { $AwsProfile        = Read-Host 'AWS profile' }
     if (-not $AzureSubscription) { $AzureSubscription = Read-Host 'Azure subscription id' }
@@ -78,6 +80,19 @@ if ($rgExists -eq 'true') {
         exit 1
     }
     Write-Host "  [ok] no virtual network gateways remain in $rg." -ForegroundColor Green
+
+    # The container group is a fraction of the gateway's cost, but it bills per
+    # second for as long as it exists, so a leftover one bills forever quietly.
+    if ($probeGroup) {
+        $cgs = az container list --resource-group $rg --subscription $AzureSubscription -o json 2>$null | ConvertFrom-Json
+        if ($cgs -and $cgs.Count -gt 0) {
+            Write-Host "  [FAIL] $($cgs.Count) container group(s) still exist in $rg - STILL BILLING." -ForegroundColor Red
+            $cgs | ForEach-Object { Write-Host "         - $($_.name)" -ForegroundColor Red }
+            exit 1
+        }
+        Write-Host "  [ok] no container groups remain in $rg." -ForegroundColor Green
+    }
+
     Write-Host "  [note] resource group $rg still exists." -ForegroundColor Yellow
 }
 else {

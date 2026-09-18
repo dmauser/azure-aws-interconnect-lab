@@ -150,4 +150,17 @@ resource "aws_instance" "vm" {
   }
 
   tags = { Name = "vm-${var.prefix}-aws" }
+
+  lifecycle {
+    # data.aws_ssm_parameter.al2023_arm64 resolves to whatever AMI Amazon
+    # published most recently, so it moves on its own schedule. Without this,
+    # an apply that was meant to change something else entirely destroys and
+    # recreates the instance -- which changes its private IP, invalidates every
+    # latency baseline collected so far, and silently rewrites the address the
+    # probes and the docs both refer to.
+    #
+    # A fresh deployment still gets the current AMI; only an existing one is
+    # held steady. Taint the instance deliberately to pick up a newer image.
+    ignore_changes = [ami]
+  }
 }

@@ -20,15 +20,20 @@ locals {
 
   # Flow logs are gated separately from the rest of observability. They write to
   # blob storage using SHARED KEY authentication, which many subscriptions deny
-  # via Azure Policy ("Storage accounts should prevent shared key access"). When
-  # that policy applies, the storage account cannot be created at all:
+  # via Azure Policy ("Storage accounts should prevent shared key access").
+  #
+  # In this tenant the policy uses a MODIFY effect rather than Deny: the storage
+  # account is created successfully but with allowSharedKeyAccess rewritten to
+  # false, and the failure only surfaces later as
   #
   #   403 KeyBasedAuthenticationNotPermitted: Key based authentication is not
   #   permitted on this storage account.
   #
-  # There is no Entra-only alternative for flow logs today, so on such a
-  # subscription this must be false. The Log Analytics workspace and the
-  # Connection Monitor are unaffected and still work.
+  # The SecurityControl=Ignore tag on azurerm_storage_account.flowlogs exempts
+  # the account from that policy, which is what makes flow logs viable here. On
+  # a tenant that enforces the same control with a Deny effect, or that does not
+  # honour that tag, this must stay false. The Log Analytics workspace and the
+  # Connection Monitor are unaffected either way.
   flow_logs = var.enable_observability && var.enable_flow_logs ? 1 : 0
 }
 
@@ -64,7 +69,27 @@ resource "azurerm_storage_account" "flowlogs" {
   https_traffic_only_enabled      = true
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
-  tags                            = local.tags
+
+  # Flow logs write to blob storage with SHARED KEY auth, and there is no
+  # Entra-only alternative. Asserted explicitly rather than left to the provider
+  # default so that `terraform plan` reports drift if the policy exemption below
+  # ever stops applying.
+  shared_access_key_enabled = true
+
+  # SecurityControl=Ignore exempts the account from the tenant policy that would
+  # otherwise silently rewrite allowSharedKeyAccess to false. The policy uses a
+  # MODIFY effect, not Deny, so without this tag the create still SUCCEEDS and
+  # only the flow log writer fails later with
+  # 403 KeyBasedAuthenticationNotPermitted -- which is why the create exit code
+  # cannot be trusted here and the property must be read back.
+  #
+  # Verified empirically in subscription DMAUSER-FDPO (tenant 16b3c013):
+  #   untagged  + --allow-shared-key-access true -> reads back false
+  #   tagged    + --allow-shared-key-access true -> reads back true
+  #
+  # This tag is a Microsoft-internal convention, not a documented Azure feature;
+  # it has no effect in tenants whose policies do not look for it.
+  tags = merge(local.tags, { SecurityControl = "Ignore" })
 }
 
 resource "azurerm_log_analytics_workspace" "lab" {
@@ -205,5 +230,16 @@ resource "azurerm_network_connection_monitor" "cross_cloud" {
 
   # The agent must be present before the monitor starts probing.
   depends_on = [azurerm_virtual_machine_extension.network_watcher]
+
+  lifecycle {
+    # Recreate rather than update whenever the VM is replaced.
+    #
+    # azurerm cannot update this resource in place once the source VM's ID
+    # changes -- it fails the apply with "Provider produced inconsistent final
+    # plan ... planned set element ... does not correlate with any element in
+    # actual" on .endpoint. That is a provider bug, but it is reached every time
+    # the VM is rebuilt, which the probe's cloud-init makes routine.
+    replace_triggered_by = [azurerm_linux_virtual_machine.vm]
+  }
 }
 

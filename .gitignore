@@ -47,3 +47,7 @@ Thumbs.db
 .squad/.scratch/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
+
+# Python bytecode from local syntax checks of the probe scripts
+__pycache__/
+*.pyc

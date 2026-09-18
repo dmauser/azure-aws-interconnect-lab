@@ -10,7 +10,7 @@
   <img alt="Terraform" src="https://img.shields.io/badge/Terraform-1.5%2B-7B42BC?logo=terraform&logoColor=white">
   <img alt="Azure" src="https://img.shields.io/badge/Azure-ExpressRoute-0078D4?logo=microsoftazure&logoColor=white">
   <img alt="AWS" src="https://img.shields.io/badge/AWS-Direct%20Connect-FF9900?logo=amazonaws&logoColor=white">
-  <img alt="Cost" src="https://img.shields.io/badge/cost-~%24161%2Fmo-brightgreen">
+  <img alt="Cost" src="https://img.shields.io/badge/cost-~%24177%2Fmo-brightgreen">
   <img alt="Deploy time" src="https://img.shields.io/badge/deploy-~30%20min-blue">
 </p>
 
@@ -28,6 +28,7 @@ empty subscription to a verified end-to-end path.
 | Know what it costs | [Cost](#cost) |
 | **Bring the lab up** | **[Deploy](#deploy)** |
 | Prove it actually works | [Verify](#verify) |
+| **Measure what the path costs in milliseconds** | **[Latency probe](#latency-probe)** |
 | Change region, prefix, or CIDRs | [Configuration](#configuration) |
 | Read the routing in detail | [docs/control-plane.md](docs/control-plane.md) |
 | See what went wrong along the way | [docs/lessons-learned.md](docs/lessons-learned.md) |
@@ -42,7 +43,7 @@ empty subscription to a verified end-to-end path.
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/az-aws-interconnect-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/az-aws-interconnect.svg">
-    <img src="docs/az-aws-interconnect.svg" alt="Azure to AWS Multicloud Interconnect — end-to-end path: an Azure spoke VNet peers to a hub VNet holding an ExpressRoute gateway, which connects over a provider-managed interconnect to an AWS Direct Connect gateway, a virtual private gateway, and finally the AWS VPC." width="100%">
+    <img src="docs/az-aws-interconnect.svg" alt="Azure to AWS Multicloud Interconnect — end-to-end path: an Azure spoke VNet peers to a hub VNet holding an ExpressRoute gateway, which connects over a provider-managed interconnect to an AWS Direct Connect gateway, a virtual private gateway, and finally the AWS VPC. A dashed measurement plane shows a Container Instances prober in the hub and the spoke VM both probing the AWS private IP and reporting to a collector on the VM." width="100%">
   </picture>
 </p>
 
@@ -62,11 +63,15 @@ flowchart TB
     classDef aws    fill:#C2660A,stroke:#FBBF24,stroke-width:1.5px,color:#FFFFFF
     classDef fabric fill:#4B5563,stroke:#D1D5DB,stroke-width:1.5px,color:#FFFFFF
     classDef net    fill:#334155,stroke:#94A3B8,stroke-width:1.5px,color:#E2E8F0
+    classDef probe  fill:#0E7490,stroke:#67E8F9,stroke-width:1.5px,color:#FFFFFF
+
+    OPERATOR["<b>Operator browser</b><br/>http://&lt;vm public ip&gt;:8080<br/><i>NSG-restricted to the operator /32</i>"]:::probe
 
     subgraph AZURE["☁️ Microsoft Azure · your subscription"]
         direction TB
-        AZVM["<b>vm-mcilab-azure</b><br/>Standard_B1s · Ubuntu 24.04<br/>10.100.1.4 · MTU 1400<br/><i>spoke vnet-mcilab-spoke · 10.100.1.0/24 · East US 2</i>"]:::azure
+        AZVM["<b>vm-mcilab-azure</b><br/>Standard_B1s · Ubuntu 24.04<br/>10.100.1.4 · MTU 1400<br/>prober + collector + dashboard :8080<br/><i>spoke vnet-mcilab-spoke · 10.100.1.0/24 · East US 2</i>"]:::azure
         ERGW["<b>ergw-mcilab</b><br/>ExpressRoute gateway · Standard SKU<br/>BGP peers 10.100.0.4 – .7<br/><i>hub vnet-mcilab-hub · GatewaySubnet 10.100.0.0/27 · East US</i>"]:::azure
+        ACIPROBE["<b>ci-mcilab-probe</b><br/>Container Instances · 0.5 vCPU / 0.5 GB<br/>ICMP + TCP-connect RTT prober<br/><i>snet-mcilab-probe · 10.100.0.32/27 · delegated · East US</i>"]:::probe
         AZSEC["nsg-mcilab-vm<br/>SSH from operator /32<br/>any from 10.200.0.0/16"]:::net
     end
 
@@ -96,10 +101,19 @@ flowchart TB
     AWSVM --- AWSSEC
     VGW --- RT
 
+    ACIPROBE -. "latency samples · HTTP POST over the peering" .-> AZVM
+    OPERATOR -. "dashboard · TCP 8080" .-> AZVM
+    ACIPROBE -. "ICMP + TCP 22 RTT · East US vantage point" .-> AWSVM
+    AZVM -. "ICMP + TCP 22 RTT · East US 2 vantage point" .-> AWSVM
+
     style AZURE fill:#0F1B2D,stroke:#2E90FA,stroke-width:2px,color:#7CC3FF
     style EDGE  fill:#1A1F27,stroke:#9CA3AF,stroke-width:2px,color:#D1D5DB
     style AWSC  fill:#241A0C,stroke:#F59E0B,stroke-width:2px,color:#FBBF24
 ```
+
+The dotted teal edges are the **measurement plane**. They observe the path; they never
+carry it. Nothing about the circuit, the interconnect, the DXGW, the VGW or the gateway
+changes when the probe is enabled.
 
 </details>
 
@@ -190,10 +204,25 @@ prefix to AWS automatically.
 │   ├── interconnect.tf   only used when interconnect_mode = "create"
 │   ├── observability.tf  Log Analytics + Connection Monitor (optional)
 │   └── cloudinit/        MTU 1400 clamp on both VMs
-├── scripts/              00-configure · 00-prereqs · 01-discover · 02-verify · 04-routes · 99-destroy
-│                         (.ps1 everywhere, .sh twins for configure/verify/destroy)
+├── scripts/              00-configure · 00-prereqs · 01-discover · 02-verify · 04-routes
+│                         05-latency · 99-destroy
+│                         (.ps1 everywhere, .sh twins for configure/verify/routes/latency/destroy)
 └── docs/                 control-plane.md · lessons-learned.md · sample-routes.txt · editable .drawio
 ```
+
+Every script is PowerShell-first; five of them ship a bash twin that takes the same flags.
+There is no `03-` — the numbering gap is deliberate.
+
+| Script | PowerShell | bash | What it does |
+|---|---|---|---|
+| `00-prereqs` | `pwsh scripts/00-prereqs.ps1` | — | Tooling and sign-in check for both clouds. |
+| `aws-login` | `pwsh scripts/aws-login.ps1` | — | Stores the `mcilab` AWS profile; never echoes the secret. |
+| `00-configure` | `pwsh scripts/00-configure.ps1` | `./scripts/00-configure.sh` | Interactive setup end to end; writes `terraform.tfvars`. |
+| `01-discover` | `pwsh scripts/01-discover.ps1` | — | Authoritative dump of circuit + interconnect + DXGW state. |
+| `02-verify` | `pwsh scripts/02-verify.ps1` | `./scripts/02-verify.sh` | Post-deploy: routes, propagation, DXGW state, ping, MTU. |
+| `04-routes` | `pwsh scripts/04-routes.ps1` | `./scripts/04-routes.sh` | Read-only routing dump on both ends. |
+| **`05-latency`** | **`pwsh scripts/05-latency.ps1`** | **`./scripts/05-latency.sh`** | **Reads the collector and prints the two vantage points' min/p50/p95. See [Latency probe](#latency-probe).** |
+| `99-destroy` | `pwsh scripts/99-destroy.ps1` | `./scripts/99-destroy.sh` | Teardown, plus a check that the ER gateway is really gone. |
 
 ---
 
@@ -281,12 +310,34 @@ Then pass `-AwsProfile <name>` / set `aws_profile` if you used a different name.
 | AWS public IPv4 | ~4 |
 | AWS VGW / DXGW / DXGW association | **0** |
 | Azure MCI circuit + egress | **0** (free during preview) |
-| **Total** | **~161** |
+| Azure Container Instances `ci-mcilab-probe` — 0.5 vCPU / 0.5 GB, **always-on** | ~16 |
+| **Total** | **~177** |
 
 > [!WARNING]
 > **~85% of the cost is the ExpressRoute gateway**, and `Standard` is already the cheapest
 > ExpressRoute-capable SKU — there is no cheaper option. It bills hourly from the moment it
 > exists. **Run [the teardown](#step-4--tear-down) when you are done.**
+
+> [!IMPORTANT]
+> **The [latency probe](#latency-probe) container group is a real recurring cost.** Azure
+> Container Instances bills **per vCPU-second and per GB-second** for the lifetime of the
+> container group — metered from the first image pull until the group terminates, with
+> deployment time excluded. The probe is sized **0.5 vCPU / 0.5 GB** and runs continuously,
+> so the charge scales with uptime rather than with traffic.
+>
+> At East US Consumption rates of **$0.0405 per vCPU-hour** and **$0.00445 per GB-hour**,
+> 730 hours comes to **~$16.41/mo** (`0.5 × 730 × 0.0405` + `0.5 × 730 × 0.00445`). Rates
+> fetched from the [Azure Retail Prices API](https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices)
+> on 2026-09-18 with:
+>
+> ```
+> https://prices.azure.com/api/retail/prices?$filter=serviceName eq 'Container Instances'
+>   and armRegionName eq 'eastus' and priceType eq 'Consumption'
+> ```
+>
+> Rates are region-specific and change — re-run that query for your own region rather than
+> trusting this number, and set `enable_latency_probe = false` if you do not want the
+> charge. Destroy the group with the rest of the lab either way.
 
 <details>
 <summary>Cost choices baked into the design</summary>
@@ -469,6 +520,135 @@ prefixes and how to read the output of each.
 
 ---
 
+## Latency probe
+
+`02-verify` answers *"is the path up?"*. The latency probe answers *"what does the path
+cost in milliseconds, and how much of that is the lab's own topology?"*
+
+### What it measures
+
+Two vantage points probe the **same** target — the AWS EC2 **private** IP across the
+interconnect — with the same prober:
+
+- **ICMP echo** (raw socket), and
+- **TCP-connect RTT to port 22**, which is the number that matters, because it measures a
+  full handshake through the same path a real application would take.
+
+| Vantage point | Where it runs | Why it exists |
+|---|---|---|
+| **East US hub** | `ci-mcilab-probe`, an Azure Container Instances group in `snet-mcilab-probe` (`10.100.0.32/27`), sitting **beside the ExpressRoute gateway** | The floor. This is as close to the circuit as anything in the lab can get. |
+| **East US 2 spoke** | `vm-mcilab-azure`, the VM that was already there | What a workload in this lab actually experiences, one VNet peering hop further out. |
+
+Both POST their samples over the existing hub↔spoke peering to a collector on
+`vm-mcilab-azure` (`10.100.1.4:8080`), which also serves the dashboard. **Nothing about
+the transport layer changes** — the circuit, the interconnect, the DXGW, the VGW, the
+peering and the gateway are all untouched.
+
+### Results
+
+TCP-connect RTT to port 22, 30 samples per vantage point:
+
+| Vantage point | min | p50 | p95 |
+|---|---|---|---|
+| **East US hub** — ACI, beside the ER gateway | **3.440 ms** | **4.343 ms** | **8.316 ms** |
+| **East US 2 spoke** — the existing VM | 7.694 ms | 8.254 ms | 12.650 ms |
+
+**The forced region split costs roughly 3.9 ms of RTT at p50 — about half the total.**
+
+That is the price of [lesson 1 and lesson 2](docs/lessons-learned.md) colliding: a
+MultiCloud circuit is evaluated as a *Local* circuit and attaches only to East US, but
+this subscription cannot deploy VMs in East US at all. The gateway has to live in the hub
+and the VM in the spoke, and the extra region hop is measurable. On a subscription that
+can build VMs in the gateway region, collapsing to a single VNet should recover most of
+that 3.9 ms.
+
+### Viewing the dashboard
+
+```powershell
+pwsh scripts/05-latency.ps1            # bash: ./scripts/05-latency.sh
+```
+
+It prints the current min/p50/p95 for both vantage points and the URL of the live chart:
+
+```
+http://<vm public ip>:8080
+```
+
+The NSG restricts port 8080 to the operator `/32` that `00-configure` detected, exactly
+like SSH. `terraform output resource_names` has the VM's public IP if you need it by hand.
+
+The page shows a live topology diagram of the measured path, the per-vantage percentile
+cards, and a median-RTT chart. The diagram's labels are all fed in from Terraform, so it
+never carries its own copy of a CIDR or a region name.
+
+### Sharing the dashboard
+
+To let colleagues see it, widen the NSG source list:
+
+```hcl
+# terraform.tfvars
+probe_dashboard_allowed_cidrs = ["0.0.0.0/0"]   # null = operator IP only (default)
+```
+
+Know what that does before you set it:
+
+- The dashboard is **plain HTTP with no authentication**. The VM has a bare public IP and
+  no DNS name, so there is nothing to put a certificate on.
+- Anyone who finds the address can read your topology, your CIDRs and the AWS target's
+  private IP.
+- It does **not** open the write path. The collector rejects `POST /ingest` from anything
+  outside `COLLECTOR_INGEST_CIDRS` (private space by default), so a reader on the internet
+  cannot poison the measurements or fill the disk. That check lives in the application
+  rather than the NSG because reads and writes share one port.
+- SSH stays restricted to your own IP regardless of this setting.
+
+Treat an open value as temporary and set it back to `null` when you are done sharing.
+
+### Why the dashboard lives on the East US 2 VM
+
+Not a design preference — the only option left standing. Hosting it in the East US hub,
+next to the probe, was tried first and failed three different ways:
+
+| Option in East US | Outcome |
+|---|---|
+| Another VM | **Impossible.** All 1420 VM SKUs report a `type: Location` restriction. Capacity, not quota — a quota request will not clear it. |
+| Azure Container Apps | **Blocked.** Environment creation fails after ~6 minutes with HTTP 400 `AKSCapacityHeavyUsage`. ACA is AKS-backed, so it inherits the same capacity wall. |
+| Azure App Service | **Blocked.** P0v3, B1 and S1 all fail with `Current Limit (<sku> VMs): 0`. This one *is* quota, so in principle a quota request could clear it. |
+| Azure Container Instances, VNet-injected | **Works** — but a VNet-injected container group gets a **private IP only** and cannot expose ingress. Fine for the prober, useless for a dashboard. |
+
+So the prober runs in ACI where the latency is worth measuring, and the collector and
+dashboard run on the East US 2 VM where something can actually listen on a public port.
+Full write-up in [lesson 4](docs/lessons-learned.md#4-the-east-us-compute-hunt-aca-inherits-the-vm-capacity-wall-app-service-does-not).
+
+> [!NOTE]
+> **Discard the warmup samples.** The first probe from a freshly created container group
+> fails outright with `No route to host`, and one early sample came back at **1636 ms**
+> before settling into the numbers above. VNet route programming for a new container group
+> takes a few seconds. Any run that includes the first few samples is measuring Azure's
+> provisioning, not the interconnect.
+
+> [!TIP]
+> Two ACI constraints are load-bearing here and both are easy to trip over:
+> - The probe subnet must be **delegated** to `Microsoft.ContainerInstance/containerGroups`
+>   before the group will deploy, and once delegated it can hold nothing else.
+> - **Only `mcr.microsoft.com` images work.** Pulling from Docker Hub fails with
+>   `RegistryErrorResponse` from `index.docker.io`. The prober uses
+>   `mcr.microsoft.com/azurelinux/base/python:3.12`.
+>
+> Microsoft also recommends a **/24 or larger** subnet for VNet-injected ACI and warns that
+> smaller subnets can fail with "subnet full". This lab uses a `/27` for a single
+> 0.5-vCPU group and it deploys reliably, but that is below the documented
+> recommendation — widen it if you scale the probe out.
+
+> [!WARNING]
+> **ExpressRoute FastPath is not a fix for the 3.9 ms.** It is a dead end here twice over:
+> it requires an `UltraPerformance` / `ErGw3AZ` / `ErGwScale` ≥ 10-scale-unit gateway and
+> this lab runs `Standard`; and VNet-peering-over-FastPath — the part that would actually
+> address a hub/spoke hop — requires **ExpressRoute Direct**, not a provider circuit. See
+> [lesson 9](docs/lessons-learned.md#9-expressroute-fastpath-is-a-dead-end-for-this-lab-twice-over).
+
+---
+
 ## Configuration
 
 ### Where the interconnect comes from
@@ -560,7 +740,7 @@ discovers every one of them and writes them to `terraform.tfvars`, which is giti
 | Variable | Default | What it does |
 |---|---|---|
 | `enable_observability` | `true` | Log Analytics workspace + Connection Monitor probing the cross-cloud path continuously. Works everywhere. |
-| `enable_flow_logs` | `false` | VNet flow logs → storage. **Off by default**: flow logs authenticate with the storage *account key*, and many subscriptions deny that by policy (`KeyBasedAuthenticationNotPermitted`). See [lesson 7](docs/lessons-learned.md#7-vnet-flow-logs-need-storage-shared-keys--which-policy-often-forbids). |
+| `enable_flow_logs` | `false` | VNet flow logs → storage. **Off by default**: flow logs authenticate with the storage *account key*, and many subscriptions deny that by policy (`KeyBasedAuthenticationNotPermitted`). See [lesson 8](docs/lessons-learned.md#8-vnet-flow-logs-need-storage-shared-keys--which-policy-often-forbids). |
 | `create_interconnect` | `true` | Set `false` to build both landing zones and the gateway but leave the clouds **unjoined**, then flip to `true` and re-apply to complete the link live — useful for demos. |
 | `azure_auto_shutdown_time` | `"2000"` | Nightly auto-shutdown for the Azure VM. `null` disables. |
 | `my_public_ip` | auto | Detected via `ifconfig.me` and pinned into the NSG and security group. Set explicitly if detection is wrong. |
@@ -631,7 +811,7 @@ by itself.
 | Document | What's in it |
 |---|---|
 | **[docs/control-plane.md](docs/control-plane.md)** | How ExpressRoute and the DXGW exchange prefixes, what a healthy `list-learned-routes` looks like on each side, and what to check when only one direction works. |
-| **[docs/lessons-learned.md](docs/lessons-learned.md)** | The nine things that cost real time: the Local-circuit region trap, East US capacity, state desynchronisation after a failed apply, the `ip_tags` replacement loop, orphaned ExpressRoute connections, the flow-logs shared-key policy — plus a gotchas quick reference. |
+| **[docs/lessons-learned.md](docs/lessons-learned.md)** | The eleven things that cost real time: the Local-circuit region trap, East US capacity, the East US compute hunt (ACA inherits the VM capacity wall, App Service does not), state desynchronisation after a failed apply, the `ip_tags` replacement loop, orphaned ExpressRoute connections, the flow-logs shared-key policy, the ExpressRoute FastPath dead end — plus a gotchas quick reference. |
 | **[docs/az-aws-interconnect.drawio](docs/az-aws-interconnect.drawio)** | Editable diagram with the official Azure and AWS icon sets. |
 
 ### External references

@@ -195,6 +195,47 @@ if (-not $SkipDataPlane) {
 }
 
 ##############################################################################
+if ($names.probe_enabled) {
+    Write-Host "`n=== Latency probe ===" -ForegroundColor Cyan
+
+    # Control-plane only, so this still runs under -SkipDataPlane. It answers
+    # "are both vantage points reporting?" - 05-latency.ps1 is where the actual
+    # numbers live.
+    $cgState = az container show --name $names.probe_container_group `
+        --resource-group $rgName --subscription $AzureSubscription `
+        --query "containers[0].instanceView.currentState.state" -o tsv 2>$null
+
+    if ($cgState -eq 'Running') {
+        Write-Host "  [ok] hub prober $($names.probe_container_group) is running." -ForegroundColor Green
+    }
+    else {
+        Write-Host "  [FAIL] hub prober $($names.probe_container_group) is '$cgState', not Running." -ForegroundColor Red
+        $failures += 'latency probe container group is not running'
+    }
+
+    $probeUrl = ($tf.probe_dashboard_url.value).TrimEnd('/')
+    try {
+        $summary = Invoke-RestMethod -Uri "$probeUrl/api/summary?window=15m" -TimeoutSec 20
+        $reporting = @($summary.PSObject.Properties.Name)
+
+        foreach ($v in $reporting) {
+            Write-Host "  [ok] $v reporting ($($summary.$v.samples) samples in 15m)." -ForegroundColor Green
+        }
+
+        if ($reporting.Count -lt 2) {
+            # One vantage point cannot produce the hub-versus-spoke delta, which
+            # is the only reason the probe exists.
+            Write-Host "  [warn] only $($reporting.Count) vantage point(s) reporting; expected 2." -ForegroundColor Yellow
+            Write-Host '         A freshly applied probe needs a minute or two before both appear.' -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "  [warn] collector unreachable at $probeUrl : $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host '         Check that the NSG permits your current public IP on the dashboard port.' -ForegroundColor Yellow
+    }
+}
+
+##############################################################################
 Write-Host "`n=== Summary ===" -ForegroundColor Cyan
 if ($failures.Count -eq 0) {
     Write-Host '  All checks passed - the private cross-cloud path is up.' -ForegroundColor Green

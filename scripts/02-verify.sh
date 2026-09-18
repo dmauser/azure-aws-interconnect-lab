@@ -375,6 +375,47 @@ if [[ "$SKIP_DATA_PLANE" != true ]]; then
 fi
 
 ##############################################################################
+probe_enabled=$(jq -r '.resource_names.value.probe_enabled // false' <<<"$tf_json")
+if [[ "$probe_enabled" == 'true' ]]; then
+    Write-Step 'Latency probe'
+
+    # Control-plane only, so this still runs under --skip-data-plane. It answers
+    # "are both vantage points reporting?" - 05-latency.sh is where the actual
+    # numbers live.
+    probe_group=$(jq -r '.resource_names.value.probe_container_group // empty' <<<"$tf_json")
+    probe_url=$(jq -r '.probe_dashboard_url.value // empty' <<<"$tf_json" | sed 's:/*$::')
+
+    cg_state=$(az container show --name "$probe_group" --resource-group "$rg_name" \
+        --subscription "$AZURE_SUBSCRIPTION" \
+        --query "containers[0].instanceView.currentState.state" -o tsv 2>/dev/null || true)
+
+    if [[ "$cg_state" == 'Running' ]]; then
+        Write-Ok "hub prober $probe_group is running."
+    else
+        Write-Bad "hub prober $probe_group is '${cg_state:-unknown}', not Running."
+        FAILED+=('latency probe container group is not running')
+    fi
+
+    if probe_summary=$(curl -fsS --max-time 20 "$probe_url/api/summary?window=15m" 2>/dev/null); then
+        reporting=$(jq -r 'keys | length' <<<"$probe_summary")
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            Write-Ok "$line"
+        done < <(jq -r 'to_entries[] | "\(.key) reporting (\(.value.samples) samples in 15m)."' <<<"$probe_summary")
+
+        if ((reporting < 2)); then
+            # One vantage point cannot produce the hub-versus-spoke delta, which
+            # is the only reason the probe exists.
+            Write-Warn "only $reporting vantage point(s) reporting; expected 2."
+            Write-Info 'A freshly applied probe needs a minute or two before both appear.'
+        fi
+    else
+        Write-Warn "collector unreachable at $probe_url"
+        Write-Info 'Check that the NSG permits your current public IP on the dashboard port.'
+    fi
+fi
+
+##############################################################################
 Write-Step 'Summary'
 if ((${#FAILED[@]} == 0)); then
     printf '%s  All checks passed - the private cross-cloud path is up.%s\n' "$C_GREEN" "$C_RESET"

@@ -78,7 +78,29 @@ output "resource_names" {
     aws_vpn_gateway = aws_vpn_gateway.lab.id
     aws_vpc         = aws_vpc.lab.id
     prefix          = var.prefix
+
+    probe_enabled         = var.enable_latency_probe
+    probe_container_group = var.enable_latency_probe ? azurerm_container_group.probe[0].name : null
+    probe_subnet          = var.enable_latency_probe ? azurerm_subnet.probe[0].name : null
+    probe_dashboard_port  = var.probe_dashboard_port
   }
+}
+
+output "probe_dashboard_url" {
+  description = <<-EOT
+    Latency dashboard. Served from the spoke VM's public IP and locked by NSG to
+    my_public_ip, because the hub prober only ever gets a private address and
+    this subscription cannot host a Container App or App Service in East US.
+  EOT
+  value       = var.enable_latency_probe ? "http://${azurerm_public_ip.vm.ip_address}:${var.probe_dashboard_port}/" : null
+}
+
+output "probe_vantage_points" {
+  description = "Where each prober runs, and therefore what its numbers mean."
+  value = var.enable_latency_probe ? {
+    hub   = "azure-hub-${var.azure_hub_location} (Container Instances, beside the ExpressRoute gateway - the honest interconnect number)"
+    spoke = "azure-spoke-${var.azure_location} (VM - includes the inter-region hop the region split forces)"
+  } : null
 }
 
 # Same rationale as resource_names: the helper scripts should never carry their

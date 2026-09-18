@@ -33,6 +33,89 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+%{ if probe_enabled ~}
+  # Latency probe. Both files are injected base64-encoded rather than inlined,
+  # so nothing in the Python can collide with cloud-init's YAML block scoping
+  # or with Terraform's template interpolation.
+  - path: /opt/probe/prober.py
+    permissions: '0755'
+    encoding: b64
+    content: ${probe_prober_b64}
+
+  - path: /opt/probe/collector.py
+    permissions: '0755'
+    encoding: b64
+    content: ${probe_collector_b64}
+
+  - path: /etc/mcilab-probe.env
+    permissions: '0644'
+    content: |
+      PROBE_VANTAGE=${probe_vantage}
+      PROBE_REGION=${probe_region}
+      PROBE_TARGET=${probe_target}
+      PROBE_TARGET_LABEL=${probe_target_label}
+      PROBE_TCP_PORT=${probe_tcp_port}
+      PROBE_INTERVAL_SECONDS=${probe_interval_seconds}
+      PROBE_COLLECTOR_URL=http://127.0.0.1:${probe_dashboard_port}
+      COLLECTOR_PORT=${probe_dashboard_port}
+      COLLECTOR_DATA_DIR=/var/lib/mcilab-probe
+      COLLECTOR_RETENTION_DAYS=${probe_retention_days}
+      TOPO_HUB_VANTAGE=${probe_hub_vantage}
+      TOPO_SPOKE_VANTAGE=${probe_vantage}
+      TOPO_HUB_REGION=${probe_hub_region}
+      TOPO_HUB_CIDR=${probe_hub_cidr}
+      TOPO_PROBE_CIDR=${probe_subnet_cidr}
+      TOPO_SPOKE_REGION=${probe_region}
+      TOPO_SPOKE_CIDR=${probe_spoke_cidr}
+      TOPO_AWS_REGION=${probe_aws_region}
+      TOPO_AWS_CIDR=${probe_aws_cidr}
+      TOPO_AWS_TARGET=${probe_target}
+
+  - path: /etc/systemd/system/mcilab-collector.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Latency probe collector and dashboard
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      EnvironmentFile=/etc/mcilab-probe.env
+      ExecStart=/usr/bin/python3 /opt/probe/collector.py
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/mcilab-prober.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Latency prober (spoke vantage point)
+      After=network-online.target mcilab-collector.service lab-mtu.service
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      # Runs as root deliberately: an ICMP echo needs either a raw socket or a
+      # net.ipv4.ping_group_range that includes the caller, and Ubuntu ships
+      # that range empty. Without root the probe silently degrades to TCP only.
+      EnvironmentFile=/etc/mcilab-probe.env
+      ExecStart=/usr/bin/python3 /opt/probe/prober.py
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+%{ endif ~}
+
 runcmd:
   - systemctl daemon-reload
   - systemctl enable --now lab-mtu.service
+%{ if probe_enabled ~}
+  - install -d -m 0755 /var/lib/mcilab-probe
+  - systemctl enable --now mcilab-collector.service
+  - systemctl enable --now mcilab-prober.service
+%{ endif ~}

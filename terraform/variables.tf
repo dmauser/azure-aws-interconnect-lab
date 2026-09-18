@@ -392,17 +392,25 @@ variable "enable_flow_logs" {
 
     Defaults to FALSE because flow logs write to blob storage using SHARED KEY
     authentication, and many subscriptions deny that through Azure Policy
-    ("Storage accounts should prevent shared key access"). Where that policy
-    applies, the storage account cannot be created at all and the apply fails
-    with:
+    ("Storage accounts should prevent shared key access").
+
+    Where that policy uses a DENY effect, the storage account cannot be created
+    and the apply fails outright. Where it uses a MODIFY effect -- as in this
+    lab's tenant -- the create SUCCEEDS with allowSharedKeyAccess silently
+    rewritten to false, and the breakage only appears later as:
 
       403 KeyBasedAuthenticationNotPermitted
 
+    azurerm_storage_account.flowlogs carries a SecurityControl=Ignore tag that
+    exempts it from the Modify-effect policy, which is what makes this switch
+    usable here. That tag is a Microsoft-internal convention, not a documented
+    Azure feature, and has no effect in tenants that do not look for it.
+
     There is no Entra-only alternative for flow logs today. Set this to true
-    only if you know shared key access is permitted in your subscription.
-    Leaving it false still gives you the Log Analytics workspace and the
-    Connection Monitor, which is the part that actually proves the cross-cloud
-    path.
+    only if shared key access is permitted -- or exemptible -- in your
+    subscription. Leaving it false still gives you the Log Analytics workspace
+    and the Connection Monitor, which is the part that actually proves the
+    cross-cloud path.
   EOT
   type        = bool
   default     = false
@@ -430,4 +438,127 @@ variable "flow_log_retention_days" {
     condition     = var.flow_log_retention_days >= 1 && var.flow_log_retention_days <= 365
     error_message = "flow_log_retention_days must be between 1 and 365."
   }
+}
+
+##############################################################################
+# Latency probe
+#
+# Separate from enable_observability on purpose. The Connection Monitor proves
+# the path works; this measures how fast it is, from a region the Connection
+# Monitor cannot source from because it needs an agent on a VM.
+##############################################################################
+
+variable "enable_latency_probe" {
+  description = <<-EOT
+    Deploy the two-vantage latency probe: a Container Instances group in the hub
+    (East US, beside the ExpressRoute gateway) plus a collector and web
+    dashboard on the spoke VM.
+
+    This is what separates interconnect latency from the eastus2 -> eastus hop
+    that the forced region split adds. Measured on this lab: p50 4.34 ms from
+    the hub versus 8.25 ms from the spoke.
+
+    COST: the container group runs continuously -- a probe that stops measuring
+    is useless -- so it bills for vCPU-seconds and GB-seconds around the clock.
+    It is far cheaper than the ExpressRoute gateway but it is not free. Set
+    false to drop it.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "azure_probe_subnet_cidr" {
+  description = <<-EOT
+    Subnet for the probe container group, inside azure_hub_vnet_cidr and not
+    overlapping azure_gateway_subnet_cidr.
+
+    Container Instances requires the subnet be delegated to
+    Microsoft.ContainerInstance/containerGroups, and a delegated subnet cannot
+    host anything else, so this cannot share the GatewaySubnet.
+  EOT
+  type        = string
+  default     = "10.100.0.32/27"
+}
+
+variable "probe_image" {
+  description = <<-EOT
+    Container image for the prober.
+
+    Must come from mcr.microsoft.com. Pulling from Docker Hub fails in this
+    subscription with RegistryErrorResponse from index.docker.io, and ACI gives
+    no way to retry past it. The prober is pure standard library, so any image
+    with a python3 on PATH works.
+  EOT
+  type        = string
+  default     = "mcr.microsoft.com/azurelinux/base/python:3.12"
+}
+
+variable "probe_cpu" {
+  description = "vCPU allocated to the probe container group. The workload is a sleep loop; this is the floor, not a sizing decision."
+  type        = number
+  default     = 0.5
+}
+
+variable "probe_memory_gb" {
+  description = "Memory in GB allocated to the probe container group."
+  type        = number
+  default     = 0.5
+}
+
+variable "probe_interval_seconds" {
+  description = "Seconds between probe cycles at each vantage point."
+  type        = number
+  default     = 5
+}
+
+variable "probe_retention_days" {
+  description = "Days of raw samples the collector keeps on the VM before compaction drops them."
+  type        = number
+  default     = 7
+}
+
+variable "probe_tcp_port" {
+  description = <<-EOT
+    Destination TCP port for the connect-RTT probe. 22 is used because sshd is
+    already listening on the AWS instance and the security group already permits
+    it from the Azure supernet, so the probe needs no new rules.
+  EOT
+  type        = number
+  default     = 22
+}
+
+variable "probe_dashboard_port" {
+  description = <<-EOT
+    Port the collector serves the dashboard on. Reachable two ways: privately
+    from the hub container group across the peering, and publicly on the VM's
+    public IP restricted by NSG to probe_dashboard_allowed_cidrs.
+  EOT
+  type        = number
+  default     = 8080
+}
+
+variable "probe_dashboard_allowed_cidrs" {
+  description = <<-EOT
+    Source CIDRs permitted to reach the dashboard port. Leave null to allow only
+    my_public_ip, which is the secure default.
+
+    Set to ["0.0.0.0/0"] to share the dashboard with colleagues. Understand what
+    that does before you do it:
+
+      * The dashboard is plain HTTP with no authentication. There is no TLS
+        because this VM has a bare public IP and no DNS name, so there is
+        nothing to put a certificate on.
+      * Anyone who finds the address can read your topology, your CIDRs and the
+        AWS target's private IP.
+      * It does NOT expose the write path. The collector rejects POST /ingest
+        from anything outside COLLECTOR_INGEST_CIDRS, so an internet reader
+        cannot poison the measurements or fill the disk. That check is in the
+        application, not the NSG, because both rules share one port.
+      * SSH stays restricted to my_public_ip regardless of this setting.
+
+    Treat an open value as temporary and set it back to null when the sharing is
+    done.
+  EOT
+  type        = list(string)
+  default     = null
 }

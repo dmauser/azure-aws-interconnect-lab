@@ -136,6 +136,44 @@ resource "azurerm_network_security_group" "vm" {
     source_address_prefix      = var.aws_vpc_cidr
     destination_address_prefix = "*"
   }
+
+  # Latency dashboard, reachable from the operator's IP only. Plain HTTP: this
+  # VM has a raw public IP rather than a managed frontend, and putting a
+  # certificate on it would mean a DNS name and a renewal story for a lab that
+  # is meant to be destroyed the same week.
+  dynamic "security_rule" {
+    for_each = var.enable_latency_probe ? [1] : []
+
+    content {
+      name                       = "AllowProbeDashboardFromMyIp"
+      priority                   = 120
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = tostring(var.probe_dashboard_port)
+      source_address_prefixes    = local.probe_dashboard_cidrs
+      destination_address_prefix = "*"
+    }
+  }
+
+  # Sample ingest from the hub prober, which crosses the VNet peering and so
+  # arrives with the hub subnet as its source rather than the AWS VPC.
+  dynamic "security_rule" {
+    for_each = var.enable_latency_probe ? [1] : []
+
+    content {
+      name                       = "AllowProbeIngestFromHub"
+      priority                   = 130
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = tostring(var.probe_dashboard_port)
+      source_address_prefix      = var.azure_hub_vnet_cidr
+      destination_address_prefix = "*"
+    }
+  }
 }
 
 resource "azurerm_subnet_network_security_group_association" "vm" {
@@ -262,6 +300,25 @@ resource "azurerm_linux_virtual_machine" "vm" {
 
   custom_data = base64encode(templatefile("${path.module}/cloudinit/azure-vm.yaml.tftpl", {
     mtu = var.mtu
+
+    probe_enabled          = var.enable_latency_probe
+    probe_prober_b64       = filebase64("${path.module}/probe/prober.py")
+    probe_collector_b64    = filebase64("${path.module}/probe/collector.py")
+    probe_vantage          = "azure-spoke-${var.azure_location}"
+    probe_region           = var.azure_location
+    probe_target           = aws_instance.vm.private_ip
+    probe_target_label     = "aws-${var.aws_region}"
+    probe_tcp_port         = var.probe_tcp_port
+    probe_interval_seconds = var.probe_interval_seconds
+    probe_retention_days   = var.probe_retention_days
+    probe_dashboard_port   = var.probe_dashboard_port
+    probe_hub_vantage      = "azure-hub-${var.azure_hub_location}"
+    probe_hub_region       = var.azure_hub_location
+    probe_hub_cidr         = var.azure_hub_vnet_cidr
+    probe_subnet_cidr      = var.azure_probe_subnet_cidr
+    probe_spoke_cidr       = var.azure_vnet_cidr
+    probe_aws_region       = var.aws_region
+    probe_aws_cidr         = var.aws_vpc_cidr
   }))
 }
 
