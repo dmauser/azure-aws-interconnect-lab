@@ -252,6 +252,13 @@ if [[ "$interconnect_mode" == 'create' ]]; then
             while IFS= read -r circuit; do
                 printf '%s%s%s\n' "$C_RED" "$circuit" "$C_RESET"
             done
+            printf '%s         Deleting the AWS interconnect returns before Azure has finished%s\n' "$C_YELLOW" "$C_RESET"
+            printf '%s         deprovisioning the circuit, so the circuit delete can lose that race%s\n' "$C_YELLOW" "$C_RESET"
+            printf '%s         and fail with ConflictError "operation already in progress".%s\n' "$C_YELLOW" "$C_RESET"
+            printf '%s         This is expected - create mode needs two destroys, like two applies.%s\n' "$C_YELLOW" "$C_RESET"
+            printf '%s         Wait until serviceProviderProvisioningState reads DeProvisioned:%s\n' "$C_YELLOW" "$C_RESET"
+            printf '%s           az network express-route show -g %s -n <name> --subscription %s --query serviceProviderProvisioningState -o tsv%s\n' "$C_YELLOW" "$rg" "$AZURE_SUBSCRIPTION" "$C_RESET"
+            printf '%s         then re-run this script. No manual cleanup is needed.%s\n' "$C_YELLOW" "$C_RESET"
             exit 1
         fi
     fi

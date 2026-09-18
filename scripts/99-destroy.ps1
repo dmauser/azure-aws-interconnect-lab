@@ -124,6 +124,13 @@ if ($interconnectMode -eq 'create') {
         if ($circuits -and $circuits.Count -gt 0) {
             Write-Host "  [FAIL] $($circuits.Count) ExpressRoute circuit(s) still exist in $rg." -ForegroundColor Red
             $circuits | ForEach-Object { Write-Host "         - $($_.name)" -ForegroundColor Red }
+            Write-Host '         Deleting the AWS interconnect returns before Azure has finished' -ForegroundColor Yellow
+            Write-Host '         deprovisioning the circuit, so the circuit delete can lose that race' -ForegroundColor Yellow
+            Write-Host '         and fail with ConflictError "operation already in progress".' -ForegroundColor Yellow
+            Write-Host '         This is expected - create mode needs two destroys, like two applies.' -ForegroundColor Yellow
+            Write-Host '         Wait until serviceProviderProvisioningState reads DeProvisioned:' -ForegroundColor Yellow
+            Write-Host "           az network express-route show -g $rg -n <name> --subscription $AzureSubscription --query serviceProviderProvisioningState -o tsv" -ForegroundColor Yellow
+            Write-Host '         then re-run this script. No manual cleanup is needed.' -ForegroundColor Yellow
             exit 1
         }
     }

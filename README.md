@@ -788,6 +788,13 @@ aws_dx_gateway.lab             where it lands
 >   --query serviceProviderProvisioningState -o tsv
 > ```
 >
+> **Teardown is symmetric — expect two destroys too.** Deleting the AWS interconnect
+> returns before Azure has finished deprovisioning the circuit, so the circuit delete can
+> lose that race and fail with `ConflictError: operation already in progress`. The same
+> command above walks `Provisioned → NotProvisioned → DeProvisioned` over ~10 minutes;
+> once it reads `DeProvisioned`, re-run `99-destroy` and the circuit goes in ~20 seconds.
+> The script detects this and tells you, rather than reporting a clean teardown.
+>
 > Full detail in [lesson 10](docs/lessons-learned.md).
 
 > [!WARNING]

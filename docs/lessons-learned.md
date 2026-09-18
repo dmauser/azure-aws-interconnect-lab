@@ -485,6 +485,36 @@ procedure it is needed for. Fixed by using `one(resource.y[*].name)`, which yiel
 instead. That is already the idiom used elsewhere in this repo; `outputs.tf` was the
 straggler.
 
+### And the symmetric one, found on teardown: `create` needs **two destroys**
+
+Tearing the lab down is not one clean pass either. `terraform destroy` respects the
+dependency — `awscc_interconnect_connection` reads the circuit's `activationKey`, so the
+AWS side is destroyed first — but the AWS delete **returns before Azure has finished
+deprovisioning the circuit**. Terraform then immediately issues the circuit `DELETE` and
+loses the race:
+
+```
+Error: Failed to delete resource
+  ERROR CODE: ConflictError
+  "The current operation could not be executed because it is already in progress."
+```
+
+Watching `serviceProviderProvisioningState` shows why: it walks
+`Provisioned → NotProvisioned → DeProvisioned` over about **ten minutes** after the AWS
+connection is gone, and the circuit sits at `provisioningState = Failed` the whole time.
+`Failed` here is alarming and misleading — nothing is broken and no manual cleanup is
+required. Once the state settles on `DeProvisioned`, re-running the destroy removes the
+circuit in **22 seconds**.
+
+So the asymmetry of `create` mode is symmetric after all: two applies to build it, two
+destroys to remove it, both for the same reason — the two providers pair and unpair
+asynchronously and neither API blocks until the other side is done. `99-destroy` now
+detects the leftover circuit and prints this explanation rather than just failing.
+
+This is also the one case where the teardown check earns its keep: the run that hit it
+exited non-zero and named `erc-mcilab2-aws`, instead of reporting a clean teardown while
+an ExpressRoute circuit quietly remained.
+
 ## 11. Small things that still cost real time
 
 | Trap | Reality |
@@ -532,6 +562,10 @@ Worth recording so it isn't re-litigated:
   fails in ~1s, but Terraform will not tell you until the 25-minute gateway finishes.
 - **`create` mode is a two-apply flow.** The provider pairing takes ~15 minutes; the first
   apply stops on a precondition, the second attaches the ExpressRoute connection.
+- **`create` mode is also a two-destroy flow.** The AWS interconnect delete returns before
+  Azure finishes deprovisioning the circuit, so the circuit delete fails with
+  `ConflictError`. Wait for `serviceProviderProvisioningState = DeProvisioned` (~10 min)
+  and re-run. `provisioningState = Failed` during that window is expected, not damage.
 - **Never trust `az ... wait --custom`.** It exits 0 on timeout, and
   `az network express-route wait` never matches at all. Mutation-test any waiter against a
   condition that cannot be true.
