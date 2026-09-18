@@ -584,6 +584,11 @@ if [[ "$INTERCONNECT_MODE" == 'create' ]]; then
     Write-Info 'Azure Multicloud Interconnect carries no Azure service or egress charge in preview,'
     Write-Info 'but the AWS Interconnect connection is BILLED PER PORT-HOUR at 1 Gbps.'
     Write-Info 'Destroying the lab removes both sides again.'
+    Write-Warn 'Expect TWO applies. The circuit and the AWS interconnect build in seconds, but'
+    Write-Info 'the two providers then take ~15 minutes to pair. The first apply stops on a'
+    Write-Info 'precondition saying the circuit is still Provisioning - that is expected, nothing'
+    Write-Info 'is broken and nothing needs cleaning up. Wait, then re-run:'
+    Write-Info '  terraform plan -out=tfplan   and   terraform apply tfplan'
 
     if [[ "$NON_INTERACTIVE" == true ]]; then
         if [[ "$FORCE" != true ]]; then

@@ -7,6 +7,11 @@ set -euo pipefail
 # The ExpressRoute virtual network gateway is most of this lab's running cost,
 # so this script verifies its deletion rather than trusting a clean
 # `terraform destroy` exit code.
+#
+# The Multicloud circuit and the AWS Interconnect connection are only managed by
+# this repo when interconnect_mode = "create". In that mode Terraform destroys
+# both, and this script verifies the billable AWS port is really gone. With the
+# default "existing" mode both are left intact.
 ##############################################################################
 
 AWS_PROFILE=''
@@ -231,6 +236,46 @@ if ((vgws_count > 0)); then
     exit 1
 fi
 Write-Ok 'no lab virtual private gateway remains.'
+
+# In create mode Terraform owns the transport itself. The AWS interconnect is a
+# billable port, so an orphan here quietly costs real money - which is exactly
+# the class of failure this script exists to catch.
+if [[ "$interconnect_mode" == 'create' ]]; then
+    Write-Step 'Verifying the Terraform-built interconnect pair is gone'
+
+    if [[ "$rg_exists" == 'true' ]]; then
+        circuits_json=$(az network express-route list --resource-group "$rg" --subscription "$AZURE_SUBSCRIPTION" -o json 2>/dev/null || true)
+        circuits_count=$(jq 'length' <<<"${circuits_json:-[]}")
+        if ((circuits_count > 0)); then
+            printf '%s  [FAIL] %d ExpressRoute circuit(s) still exist in %s.%s\n' "$C_RED" "$circuits_count" "$rg" "$C_RESET"
+            jq -r '.[] | "         - \(.name)"' <<<"$circuits_json" |
+            while IFS= read -r circuit; do
+                printf '%s%s%s\n' "$C_RED" "$circuit" "$C_RESET"
+            done
+            exit 1
+        fi
+    fi
+    Write-Ok 'no Multicloud circuit remains.'
+
+    # Matched on description because Terraform sets it from the prefix, and the
+    # DXGW it attached to has been destroyed by this point.
+    desc="Azure to AWS multicloud interconnect $prefix"
+    conns_json=$(aws interconnect list-connections --profile "$AWS_PROFILE" --output json 2>/dev/null || true)
+    conns_left=$(jq --arg d "$desc" \
+        '[(.connections // [])[] | select(.description == $d and (.state != "deleted") and (.state != "deleting"))]' \
+        <<<"${conns_json:-{}}")
+    conns_count=$(jq 'length' <<<"$conns_left")
+
+    if ((conns_count > 0)); then
+        printf '%s  [FAIL] AWS interconnect connection still present - YOU ARE STILL BEING BILLED.%s\n' "$C_RED" "$C_RESET"
+        jq -r '.[] | "         - \(.id) (state: \(.state))"' <<<"$conns_left" |
+        while IFS= read -r conn; do
+            printf '%s%s%s\n' "$C_RED" "$conn" "$C_RESET"
+        done
+        exit 1
+    fi
+    Write-Ok 'no lab AWS interconnect connection remains.'
+fi
 
 if [[ "$interconnect_mode" == 'create' ]]; then
     printf '\n%sTeardown complete. Terraform-managed Multicloud circuit and AWS interconnect were included in destroy.%s\n\n' "$C_CYAN" "$C_RESET"

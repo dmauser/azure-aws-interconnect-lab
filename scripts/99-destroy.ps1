@@ -7,8 +7,10 @@
     (~USD 140/month), so this script verifies its deletion rather than trusting
     a clean `terraform destroy` exit code.
 
-    The Multicloud Interconnect circuit (ER-AWS-Lab) and the AWS Interconnect
-    connection (mcc-EXAMPLE01) are NOT managed by this repo and are left intact.
+    The Multicloud Interconnect circuit and the AWS Interconnect connection are
+    only managed by this repo when interconnect_mode = "create". In that mode
+    Terraform destroys both, and this script verifies the billable AWS port is
+    really gone. With the default "existing" mode both are left intact.
 
     Expect 10-20 minutes, dominated by ExpressRoute gateway deletion.
 #>
@@ -35,6 +37,7 @@ $tf = terraform -chdir="$tfDir" output -json 2>$null | ConvertFrom-Json
 if ($tf -and $tf.resource_names) {
     $names            = $tf.resource_names.value
     $rg               = $names.resource_group
+    $prefix           = $names.prefix
     $vgwName          = "vgw-$($names.prefix)"
     $probeGroup       = $names.probe_container_group
     $interconnectMode = $tf.interconnect_mode.value
@@ -110,5 +113,39 @@ if ($vgws -and $vgws.Count -gt 0) {
 }
 Write-Host '  [ok] no lab virtual private gateway remains.' -ForegroundColor Green
 
-Write-Host "`nTeardown complete. ER-AWS-Lab and mcc-EXAMPLE01 are untouched.`n" -ForegroundColor Cyan
+# In create mode Terraform owns the transport itself. The AWS interconnect is a
+# billable port, so an orphan here quietly costs real money - which is exactly
+# the class of failure this script exists to catch.
+if ($interconnectMode -eq 'create') {
+    Write-Host "`n=== Verifying the Terraform-built interconnect pair is gone ===" -ForegroundColor Cyan
+
+    if ($rgExists -eq 'true') {
+        $circuits = az network express-route list --resource-group $rg --subscription $AzureSubscription -o json 2>$null | ConvertFrom-Json
+        if ($circuits -and $circuits.Count -gt 0) {
+            Write-Host "  [FAIL] $($circuits.Count) ExpressRoute circuit(s) still exist in $rg." -ForegroundColor Red
+            $circuits | ForEach-Object { Write-Host "         - $($_.name)" -ForegroundColor Red }
+            exit 1
+        }
+    }
+    Write-Host '  [ok] no Multicloud circuit remains.' -ForegroundColor Green
+
+    # Matched on description because Terraform sets it from the prefix, and the
+    # DXGW it attached to has been destroyed by this point.
+    $desc  = "Azure to AWS multicloud interconnect $prefix"
+    $conns = @((aws interconnect list-connections --profile $AwsProfile --output json 2>$null |
+                ConvertFrom-Json).connections |
+               Where-Object { $_.description -eq $desc -and $_.state -notin @('deleted', 'deleting') })
+
+    if ($conns.Count -gt 0) {
+        Write-Host '  [FAIL] AWS interconnect connection still present - YOU ARE STILL BEING BILLED.' -ForegroundColor Red
+        $conns | ForEach-Object { Write-Host "         - $($_.id) (state: $($_.state))" -ForegroundColor Red }
+        exit 1
+    }
+    Write-Host '  [ok] no lab AWS interconnect connection remains.' -ForegroundColor Green
+
+    Write-Host "`nTeardown complete. The Terraform-built Multicloud circuit and AWS interconnect were destroyed.`n" -ForegroundColor Cyan
+}
+else {
+    Write-Host "`nTeardown complete. Your existing interconnect circuit and AWS connection are untouched.`n" -ForegroundColor Cyan
+}
 exit $tfExit
