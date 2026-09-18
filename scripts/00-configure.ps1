@@ -24,6 +24,11 @@
 .EXAMPLE
     pwsh scripts/00-configure.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 `
         -AwsProfile mcilab -Prefix mcilab -NonInteractive
+
+.EXAMPLE
+    # interconnect_mode = "create" provisions an AWS interconnect that bills per
+    # port-hour, so non-interactive runs need -Force as the billing confirmation.
+    pwsh scripts/00-configure.ps1 -InterconnectMode create -NonInteractive -Force
 #>
 [CmdletBinding()]
 param(
@@ -348,7 +353,13 @@ if ($InterconnectMode -eq 'create') {
     Write-Info 'is broken and nothing needs cleaning up. Wait, then re-run:'
     Write-Info '  terraform plan -out=tfplan   and   terraform apply tfplan'
 
-    if (-not $NonInteractive) {
+    if ($NonInteractive) {
+        if (-not $Force) {
+            throw 'interconnect_mode = "create" provisions a billed AWS interconnect; re-run with -Force to confirm in -NonInteractive mode'
+        }
+        Write-Info '-Force supplied; proceeding with billed AWS interconnect creation'
+    }
+    else {
         $confirm = Read-Default -Prompt '  Understood - provision a billed AWS interconnect? (y/n)' -Default 'n'
         if ($confirm -notmatch '^(y|yes)$') {
             throw 'Aborted - re-run and choose "existing" to attach to a circuit you already own.'
