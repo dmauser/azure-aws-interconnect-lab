@@ -354,10 +354,11 @@ configuration flag, which is why it is worth writing down as closed.
 | ACI probe warmup | The **first** probe from a freshly created container group returns `No route to host`, and one early sample came back at **1636 ms**. VNet route programming takes a few seconds. Discard warmup samples or you are benchmarking Azure provisioning, not the interconnect. |
 | ACI images | Docker Hub fails with `RegistryErrorResponse`. Use `mcr.microsoft.com` — see lesson 4. |
 | ACI subnet | Must be delegated to `Microsoft.ContainerInstance/containerGroups`, and Microsoft recommends **/24 or larger**. A `/27` works for one small group but is below the documented recommendation. |
+| `draw.io --export` for the SVGs | Three separate traps, all silent. Five Azure icons live inside draw.io's own `app.asar`, so the CLI cannot inline them and writes `file:///C:/Users/<you>/...` refs instead — broken for every other reader, and a local path leaked into git. **`--embed-images` does not fix it.** There is no `--background` flag either; pass one and the colour is treated as a positional input file (`input file/directory not found: #ffffff`), while `-b/--border` is border *width*. And each export salts every gradient id with a fresh 20-char token, so an unchanged diagram still produces a whole-file diff. `scripts/render-diagrams.ps1` handles all three — use it instead of calling `draw.io` directly. |
 
 ## 11. What was right from the start
 
-Worth recording so it isn't re-litigated:
+Worth recording so it isn't re-litigated: 
 
 - **No BGP, VLAN, MD5, or 169.254.x.x peering anywhere.** The managed interconnect owns
   the underlay. Every instinct from a Megaport/Equinix ExpressRoute build is wrong here.

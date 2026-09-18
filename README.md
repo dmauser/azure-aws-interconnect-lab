@@ -53,6 +53,17 @@ empty subscription to a verified end-to-end path.
   </a>
 </p>
 
+> [!NOTE]
+> **Why the VM is in East US 2 while the gateway is in East US.** This is not a design
+> choice — it is two constraints colliding. A `MultiCloud` circuit is evaluated as a *Local*
+> circuit, so its gateway can only attach to the region matching the circuit's peering
+> location (`useast` → East US). But this subscription has **no VM capacity in East US at
+> all**: all ~1420 SKUs report a restriction of `type: Location`, which is capacity, not
+> quota, so a quota request will not clear it. Gateways are not VMs, so only the VM had to
+> move. Hence the hub/spoke split, and hence the [latency probe](#latency-probe) — it exists
+> to measure how much of the end-to-end latency is this forced extra hop rather than the
+> interconnect. Full detail in [Why hub/spoke instead of one VNet](#why-hubspoke-instead-of-one-vnet).
+
 <details>
 <summary><b>Same topology as a Mermaid diagram</b> — renders inline, easier to diff in pull requests</summary>
 
@@ -69,8 +80,8 @@ flowchart TB
 
     subgraph AZURE["☁️ Microsoft Azure · your subscription"]
         direction TB
-        AZVM["<b>vm-mcilab-azure</b><br/>Standard_B1s · Ubuntu 24.04<br/>10.100.1.4 · MTU 1400<br/>prober + collector + dashboard :8080<br/><i>spoke vnet-mcilab-spoke · 10.100.1.0/24 · East US 2</i>"]:::azure
-        ERGW["<b>ergw-mcilab</b><br/>ExpressRoute gateway · Standard SKU<br/>BGP peers 10.100.0.4 – .7<br/><i>hub vnet-mcilab-hub · GatewaySubnet 10.100.0.0/27 · East US</i>"]:::azure
+        AZVM["<b>vm-mcilab-azure</b><br/>Standard_B1s · Ubuntu 24.04<br/>10.100.1.4 · MTU 1400<br/>prober + collector + dashboard :8080<br/><i>spoke vnet-mcilab-spoke · 10.100.1.0/24 · East US 2</i><br/><i>in East US 2 only because East US has no VM capacity</i>"]:::azure
+        ERGW["<b>ergw-mcilab</b><br/>ExpressRoute gateway · Standard SKU<br/>BGP peers 10.100.0.4 – .7<br/><i>hub vnet-mcilab-hub · GatewaySubnet 10.100.0.0/27 · East US</i><br/><i>must be East US — a MultiCloud circuit is Local to its peering location</i>"]:::azure
         ACIPROBE["<b>ci-mcilab-probe</b><br/>Container Instances · 0.5 vCPU / 0.5 GB<br/>ICMP + TCP-connect RTT prober<br/><i>snet-mcilab-probe · 10.100.0.32/27 · delegated · East US</i>"]:::probe
         AZSEC["nsg-mcilab-vm<br/>SSH from operator /32<br/>any from 10.200.0.0/16"]:::net
     end
@@ -223,6 +234,18 @@ There is no `03-` — the numbering gap is deliberate.
 | `04-routes` | `pwsh scripts/04-routes.ps1` | `./scripts/04-routes.sh` | Read-only routing dump on both ends. |
 | **`05-latency`** | **`pwsh scripts/05-latency.ps1`** | **`./scripts/05-latency.sh`** | **Reads the collector and prints the two vantage points' min/p50/p95. See [Latency probe](#latency-probe).** |
 | `99-destroy` | `pwsh scripts/99-destroy.ps1` | `./scripts/99-destroy.sh` | Teardown, plus a check that the ER gateway is really gone. |
+| `render-diagrams` | `pwsh scripts/render-diagrams.ps1` | — | Docs tooling, not part of the lab lifecycle. Rebuilds both SVGs from the drawio source. |
+
+> [!TIP]
+> **Editing the diagram?** Change `docs/az-aws-interconnect.drawio`, then run
+> `pwsh scripts/render-diagrams.ps1` — never hand-edit the SVGs. A bare
+> `draw.io --export` is not enough: five Azure icons live inside draw.io's own `app.asar`
+> and come out as `file:///C:/Users/<you>/...` references that render broken for everyone
+> else, `--embed-images` does not fix it, and there is no `--background` flag. The script
+> handles all three, and pins draw.io's random per-export id salt so the diff stays
+> readable. It fails loudly rather than writing a broken diagram. Keep the Mermaid block
+> above in sync by hand, and recapture `docs/latency-dashboard.png` if the dashboard UI
+> changed.
 
 ---
 
