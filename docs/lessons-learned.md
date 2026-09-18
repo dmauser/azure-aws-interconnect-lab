@@ -309,7 +309,7 @@ Two caveats worth keeping:
 ## 9. ExpressRoute FastPath is a dead end for this lab, twice over
 
 Once the [latency probe](../README.md#latency-probe) put a number on the region split —
-**~3.9 ms of RTT at p50, roughly half the total** — the obvious next question was whether
+**~4 ms of RTT at p50, roughly half the total** — the obvious next question was whether
 ExpressRoute **FastPath** could claw it back. FastPath is exactly the right-shaped idea:
 it bypasses the ExpressRoute gateway in the data path, and "VNet peering over FastPath"
 specifically targets the spoke→hub→gateway detour this lab is forced into.
@@ -332,7 +332,7 @@ peering-over-FastPath as a supported scenario with no gateway-side caveat visibl
 you cross-read the ExpressRoute Direct column. It looks available, and it reads as a
 configuration flag, which is why it is worth writing down as closed.
 
-> **Do not re-propose FastPath as a latency fix for this topology.** If the 3.9 ms
+> **Do not re-propose FastPath as a latency fix for this topology.** If the ~4 ms
 > matters, the lever is the region split (lesson 3), not the gateway — collapse hub and
 > spoke into one VNet on a subscription that can actually build a VM in the gateway
 > region. Source:

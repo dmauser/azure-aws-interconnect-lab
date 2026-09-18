@@ -546,21 +546,32 @@ peering and the gateway are all untouched.
 
 ### Results
 
-TCP-connect RTT to port 22, 30 samples per vantage point:
+A representative one-hour window, **720 samples per vantage point per metric, 0% loss**,
+measured against the AWS EC2 **private** IP:
 
-| Vantage point | min | p50 | p95 |
-|---|---|---|---|
-| **East US hub** — ACI, beside the ER gateway | **3.440 ms** | **4.343 ms** | **8.316 ms** |
-| **East US 2 spoke** — the existing VM | 7.694 ms | 8.254 ms | 12.650 ms |
+| Vantage point | metric | min | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|---|
+| **East US hub** — ACI, beside the ER gateway | TCP/22 | 2.89 ms | **3.94 ms** | 6.94 ms | 11.42 ms | 314.62 ms |
+| **East US hub** — ACI, beside the ER gateway | ICMP | 2.76 ms | **3.15 ms** | 5.59 ms | 9.30 ms | 20.57 ms |
+| East US 2 spoke — the existing VM | TCP/22 | 6.98 ms | 8.06 ms | 8.93 ms | 10.44 ms | 29.46 ms |
+| East US 2 spoke — the existing VM | ICMP | 7.31 ms | 7.76 ms | 8.83 ms | 18.77 ms | 27.69 ms |
 
-**The forced region split costs roughly 3.9 ms of RTT at p50 — about half the total.**
+**The forced region split costs 4.12 ms of RTT at p50 — 51% of the spoke measurement.**
+
+Read the **p50**, not the tails. This is a shared lab on burstable instances (`Standard_B1s`
+and `t4g.nano`), so p99 and max pick up scheduling noise that has nothing to do with the
+interconnect — the 314 ms hub outlier is one TCP handshake out of 720, and the p50 either
+side of it never moved. ICMP runs consistently below TCP because it is answered by the
+kernel rather than by `sshd` accepting a connection.
+
+Your own numbers will differ; regenerate them any time with `05-latency.ps1`.
 
 That is the price of [lesson 1 and lesson 2](docs/lessons-learned.md) colliding: a
 MultiCloud circuit is evaluated as a *Local* circuit and attaches only to East US, but
 this subscription cannot deploy VMs in East US at all. The gateway has to live in the hub
 and the VM in the spoke, and the extra region hop is measurable. On a subscription that
 can build VMs in the gateway region, collapsing to a single VNet should recover most of
-that 3.9 ms.
+that 4.12 ms.
 
 ### Viewing the dashboard
 
@@ -568,18 +579,64 @@ that 3.9 ms.
 pwsh scripts/05-latency.ps1            # bash: ./scripts/05-latency.sh
 ```
 
-It prints the current min/p50/p95 for both vantage points and the URL of the live chart:
+It prints the current percentiles for both vantage points, the region-split delta, and the
+URL of the live chart:
 
 ```
-http://<vm public ip>:8080
+=== 1/4  Hub prober (container group) ===
+  state        : Running
+  private IP   : 10.100.0.36
+  restarts     : 0
+
+=== 2/4  Collector health ===
+  status       : ok
+  samples held : 1843
+
+=== 3/4  Percentiles by vantage point ===
+
+vantage             metric samples min  p50  p95  p99   max    loss%
+-------             ------ ------- ---  ---  ---  ---   ---    -----
+azure-hub-eastus    tcp/22     720 3.00 4.09 7.29 11.45 18.39  0.0
+azure-hub-eastus    icmp       720 2.83 3.21 5.93 14.37 20.11  0.0
+azure-spoke-eastus2 tcp/22     719 7.16 8.07 8.93 11.79 112.44 0.0
+azure-spoke-eastus2 icmp       719 7.31 7.76 8.42 11.97 20.48  0.0
+
+  All figures are milliseconds round-trip to the AWS instance PRIVATE IP.
+
+=== 4/4  Cost of the region split ===
+  azure-hub-eastus           p50     4.09 ms
+  azure-spoke-eastus2        p50     8.07 ms
+
+  region-split cost : 3.98 ms  (49% of the spoke figure)
+  That much of the spoke measurement is the inter-region hop, not the interconnect.
+
+  Live chart: http://<vm public ip>:8080
 ```
 
 The NSG restricts port 8080 to the operator `/32` that `00-configure` detected, exactly
 like SSH. `terraform output resource_names` has the VM's public IP if you need it by hand.
 
-The page shows a live topology diagram of the measured path, the per-vantage percentile
-cards, and a median-RTT chart. The diagram's labels are all fed in from Terraform, so it
-never carries its own copy of a CIDR or a region name.
+### What the dashboard looks like
+
+![The latency dashboard, showing the region-split banner, the measured path, per-vantage percentiles and the median-RTT chart](docs/latency-dashboard.png)
+
+Top to bottom:
+
+| Element | What it tells you |
+|---|---|
+| **Window selector** — `15m` / `1h` / `6h` / `24h` / `7d` | Re-aggregates everything on the page. `7d` is the full retention. |
+| **Region-split banner** | The headline: hub p50 vs spoke p50, the delta, and what share of the spoke figure is the inter-region hop rather than the interconnect. |
+| **Measured path** | A live topology of the path being timed, with each prober's current p50 rendered onto its node. The green boxes are the transport this lab does not manage; the dashed line is samples flowing back to the collector. |
+| **Vantage cards** | Per-vantage `min`/`p50`/`p95`/`p99`/`max`/`loss` for TCP and ICMP, plus an `ICMP ok` badge and a *last seen* stamp so a silently dead prober is obvious. |
+| **Median RTT over time** | Both vantage points on one axis. Gaps mean no successful probe in that bucket, so packet loss shows up as a hole rather than a straight line across it. |
+
+Every label — CIDRs, region names, the AWS target, the port — is passed in from Terraform.
+The page never carries its own copy of a value that lives in `variables.tf`, so it cannot
+drift from the deployment the way a hand-drawn diagram does.
+
+> [!NOTE]
+> The screenshot is a real capture of this lab, not a mockup. Regenerate it after a
+> topology change so the documentation keeps matching what the page actually renders.
 
 ### Sharing the dashboard
 
@@ -641,7 +698,7 @@ Full write-up in [lesson 4](docs/lessons-learned.md#4-the-east-us-compute-hunt-a
 > recommendation — widen it if you scale the probe out.
 
 > [!WARNING]
-> **ExpressRoute FastPath is not a fix for the 3.9 ms.** It is a dead end here twice over:
+> **ExpressRoute FastPath is not a fix for the 4.12 ms.** It is a dead end here twice over:
 > it requires an `UltraPerformance` / `ErGw3AZ` / `ErGwScale` ≥ 10-scale-unit gateway and
 > this lab runs `Standard`; and VNet-peering-over-FastPath — the part that would actually
 > address a hub/spoke hop — requires **ExpressRoute Direct**, not a provider circuit. See
