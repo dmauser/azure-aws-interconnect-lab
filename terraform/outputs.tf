@@ -67,9 +67,14 @@ output "interconnect_built" {
 output "resource_names" {
   description = "Names of the resources the helper scripts need to address."
   value = {
-    resource_group  = azurerm_resource_group.lab.name
-    er_gateway      = azurerm_virtual_network_gateway.ergw.name
-    er_connection   = var.create_interconnect ? azurerm_virtual_network_gateway_connection.ergw[0].name : null
+    resource_group = azurerm_resource_group.lab.name
+    er_gateway     = azurerm_virtual_network_gateway.ergw.name
+
+    # one(...) rather than [0]: during a refresh-only plan after a partial apply
+    # the resource can be declared with count = 1 yet have zero instances in
+    # state, and [0] then hard-fails with "Invalid index" -- which blocks the
+    # very recovery procedure you need it for. one() yields null instead.
+    er_connection   = one(azurerm_virtual_network_gateway_connection.ergw[*].name)
     hub_vnet        = azurerm_virtual_network.hub.name
     spoke_vnet      = azurerm_virtual_network.lab.name
     azure_vm        = azurerm_linux_virtual_machine.vm.name
@@ -80,8 +85,8 @@ output "resource_names" {
     prefix          = var.prefix
 
     probe_enabled         = var.enable_latency_probe
-    probe_container_group = var.enable_latency_probe ? azurerm_container_group.probe[0].name : null
-    probe_subnet          = var.enable_latency_probe ? azurerm_subnet.probe[0].name : null
+    probe_container_group = one(azurerm_container_group.probe[*].name)
+    probe_subnet          = one(azurerm_subnet.probe[*].name)
     probe_dashboard_port  = var.probe_dashboard_port
   }
 }

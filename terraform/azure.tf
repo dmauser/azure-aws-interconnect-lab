@@ -230,6 +230,37 @@ resource "azurerm_virtual_network_gateway_connection" "ergw" {
     create = "60m"
     delete = "60m"
   }
+
+  # In create mode the circuit is unusable until the AWS side has redeemed the
+  # activation key AND the two providers have finished pairing -- about 15
+  # minutes. Without this the apply dies on an opaque ServiceProviderNotProvisioned
+  # error from ARM; see data.azapi_resource.mci_state in interconnect.tf.
+  #
+  # In existing mode the data source has zero instances, the condition short-
+  # circuits on interconnect_mode, and this is a no-op -- a circuit you were
+  # handed is already provisioned.
+  lifecycle {
+    precondition {
+      condition = var.interconnect_mode != "create" || try(
+        one(data.azapi_resource.mci_state[*].output.properties.serviceProviderProvisioningState),
+      null) == "Provisioned"
+
+      error_message = join("", [
+        "The interconnect is still pairing. The circuit reports ",
+        "serviceProviderProvisioningState = '",
+        coalesce(try(one(data.azapi_resource.mci_state[*].output.properties.serviceProviderProvisioningState), "unknown"), "unknown"),
+        "', but the ExpressRoute connection needs 'Provisioned'.\n\n",
+        "This is expected on the first apply of interconnect_mode = \"create\": ",
+        "the Azure circuit and the AWS interconnect were both created just now, ",
+        "and the two providers take roughly 15 minutes to wire the cross-connect up.\n\n",
+        "Nothing is broken and nothing needs cleaning up. Wait a few minutes and ",
+        "re-run 'terraform plan -out=tfplan' then 'terraform apply tfplan'. Track ",
+        "progress with:\n",
+        "  az network express-route show -n erc-", var.prefix, "-aws -g rg-", var.prefix,
+        "-azure --query serviceProviderProvisioningState -o tsv",
+      ])
+    }
+  }
 }
 
 ##############################################################################

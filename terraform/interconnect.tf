@@ -7,7 +7,8 @@
 #
 # Azure-first handshake:
 #
-#   azapi_resource.mci            Azure mints an activationKey for the circuit
+#   azapi_resource.mci            Azure mints an activationKey for the circuit,
+#            |                    scoped to properties.partnerAccountId
 #            |
 #            | activationKey (sensitive: it authorises the pairing)
 #            v
@@ -16,6 +17,24 @@
 #            | attach_point
 #            v
 #   aws_dx_gateway.lab            where the interconnect lands in AWS
+#
+# properties.partnerAccountId is REQUIRED on the create call and is what makes
+# the Azure-first direction work at all. Omit it and the PUT is rejected in
+# about a second with:
+#
+#   MultiCloudCircuitActivationKeyOrPartnerAccountIdMissing
+#   "Interconnect provider circuit creation requires one of ActivationKey or
+#    PartnerAccountId to be specified."
+#
+# The two inputs select the direction of the handshake, and are mutually
+# exclusive:
+#
+#   partnerAccountId -> Azure-first. Azure mints a key redeemable only by that
+#                       AWS account. This is the flow the lab uses.
+#   activationKey    -> AWS-first. AWS minted the key and Azure redeems it.
+#
+# That is why the field is absent from a GET of an already-paired circuit built
+# the other way round -- it is a create-time input, not round-tripped state.
 #
 # The DXGW is then reused by aws.tf's association, exactly as a bring-your-own
 # DXGW would be.
@@ -49,6 +68,12 @@ resource "azapi_resource" "mci" {
     }
     properties = {
       allowClassicOperations = false
+
+      # Scopes the minted activationKey to this AWS account. Required -- see the
+      # header block for the exact error when it is missing. Note it sits at the
+      # properties level, NOT inside serviceProviderProperties.
+      partnerAccountId = var.aws_account_id
+
       serviceProviderProperties = {
         serviceProviderName = "AWS"
         peeringLocation     = var.interconnect_peering_location
@@ -109,4 +134,41 @@ resource "awscc_interconnect_connection" "lab" {
   # The awscc provider has no default_tags, so local.tags is applied by hand and
   # reshaped into the key/value pairs this resource expects.
   tags = [for k, v in local.tags : { key = k, value = v }]
+}
+
+# Pairing is asynchronous on BOTH sides. awscc returns as soon as AWS accepts
+# the key -- the AWS connection then sits at state "pending" and the Azure
+# circuit at serviceProviderProvisioningState "Provisioning" for roughly 15
+# minutes while the two providers wire the cross-connect up. Measured on this
+# lab: key redeemed 14:47, AWS "available" 15:00, Azure "Provisioned" 15:01.
+#
+# Building the ExpressRoute connection inside that window fails with:
+#
+#   ServiceProviderNotProvisioned
+#   "The current cross connection provisioning state 'NotProvisioned' of this
+#    service key '<guid>' prevents this operation."
+#
+# depends_on alone does NOT fix it -- that only orders the API calls, and the
+# AWS call returns long before the pairing completes.
+#
+# This data source re-reads the circuit *after* AWS has redeemed the key, so the
+# precondition on azurerm_virtual_network_gateway_connection.ergw can fail with
+# an actionable message instead of an opaque ARM error.
+#
+# Why not a local-exec waiter: `az ... wait --custom` cannot be trusted here. It
+# exits 0 on timeout rather than erroring, so a mangled condition looks like
+# success; and on Windows Terraform shells out through `cmd /C`, where Go's
+# backslash-escaped quotes are not understood, so the JMESPath is silently
+# corrupted and the "wait" degrades to a no-op that still reports success. Both
+# failure modes were reproduced. A precondition cannot be silently wrong.
+data "azapi_resource" "mci_state" {
+  count = var.interconnect_mode == "create" ? 1 : 0
+
+  type        = "Microsoft.Network/expressRouteCircuits@${var.azure_mci_api_version}"
+  resource_id = one(azapi_resource.mci[*].id)
+
+  response_export_values = ["properties.serviceProviderProvisioningState"]
+
+  # Forces the read to happen after the key has been redeemed, not at plan time.
+  depends_on = [awscc_interconnect_connection.lab]
 }

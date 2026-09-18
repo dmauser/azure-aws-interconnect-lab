@@ -758,7 +758,8 @@ Terraform builds the pair itself, Azure-first:
 
 ```
 azapi_resource.mci             Azure mints an
-        │                      activationKey
+        │                      activationKey, scoped
+        │                      to partnerAccountId
         ▼
 awscc_interconnect_connection  AWS redeems it,
         │                      pairing the clouds
@@ -771,11 +772,43 @@ aws_dx_gateway.lab             where it lands
 </td></tr>
 </table>
 
+> [!IMPORTANT]
+> **`create` mode takes two applies.** The circuit and the AWS interconnect are created in
+> seconds, but the two providers then take **~15 minutes** to wire the cross-connect up.
+> Until that finishes the circuit sits at `serviceProviderProvisioningState = Provisioning`
+> and refuses the ExpressRoute connection.
+>
+> The first apply therefore builds everything and stops on a precondition with a
+> plain-English message. **Nothing is broken and nothing needs cleaning up** — wait a few
+> minutes and run `terraform plan -out=tfplan` / `terraform apply tfplan` again. Watch it
+> with:
+>
+> ```powershell
+> az network express-route show -n erc-mcilab-aws -g rg-mcilab-azure `
+>   --query serviceProviderProvisioningState -o tsv
+> ```
+>
+> Full detail in [lesson 10](docs/lessons-learned.md).
+
 > [!WARNING]
-> **`create` is not free.** Azure MCI carries no Azure service or egress charge during
-> preview, but the **AWS Interconnect connection is billed per port-hour** at 1 Gbps.
-> `scripts/00-configure` makes you confirm this explicitly before it will write
+> **Treat `create` as chargeable.** Azure MCI carries no Azure service or egress charge
+> during preview, but an **AWS Interconnect connection is a billable port** in the general
+> case. `scripts/00-configure` makes you confirm this explicitly before it will write
 > `interconnect_mode = "create"`.
+>
+> <details><summary>What was actually measured on this lab</summary>
+>
+> At the time of writing the AWS Pricing API has **no Azure entry at all** for
+> `AWSInterconnect` in `us-east-1` — only `GCP`, `OCI` and last-mile metros, where
+> `1G-Tier1` lists at **$1.37/hr (~$1,000/mo)**. Cost Explorer over a 30-day window with a
+> 1 Gbps Azure interconnect in `available` state showed **$0.00** billed against the
+> service.
+>
+> So in practice the bill for this lab is the **Azure** side — the ExpressRoute gateway is
+> ~85% of it. That is an observation about a preview, **not** a pricing commitment: check
+> your own Cost Explorer before leaving `create` mode running.
+>
+> </details>
 
 <details>
 <summary>Why this needs <code>azapi</code> and <code>awscc</code> rather than the mainstream providers</summary>

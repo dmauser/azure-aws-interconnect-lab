@@ -338,7 +338,154 @@ configuration flag, which is why it is worth writing down as closed.
 > region. Source:
 > [About ExpressRoute FastPath](https://learn.microsoft.com/azure/expressroute/about-fastpath).
 
-## 10. Small things that still cost real time
+## 10. `interconnect_mode = "create"` had never been run end to end — and was broken three ways
+
+The lab defaults to `interconnect_mode = "existing"`, so the `create` path — where
+Terraform builds the MCI circuit and the AWS Interconnect itself — went a long time
+without ever being run end to end. It did not work. Standing up a second, fully
+independent instance of the lab in a clean subscription surfaced three separate defects,
+each hidden behind the one before it.
+
+### Bug one: the circuit create is rejected outright
+
+`azapi_resource.mci` sent a body carrying only `serviceProviderProperties`. ARM rejects
+that in about **one second**:
+
+```
+MultiCloudCircuitActivationKeyOrPartnerAccountIdMissing
+Interconnect provider circuit creation requires one of ActivationKey or
+PartnerAccountId to be specified.
+```
+
+The two fields are not alternatives you may pick between — they **select the direction of
+the handshake**, and are mutually exclusive:
+
+| Input | Flow | Who mints the key |
+|---|---|---|
+| `properties.partnerAccountId` | **Azure-first** — what this lab does | Azure mints it, redeemable only by that AWS account |
+| `properties.activationKey` | AWS-first | AWS minted it; Azure redeems it |
+
+The fix is one line, and the path matters:
+
+```hcl
+properties = {
+  allowClassicOperations = false
+  partnerAccountId       = var.aws_account_id   # NOT inside serviceProviderProperties
+  serviceProviderProperties = { ... }
+}
+```
+
+Verified by PUTting a throwaway circuit directly: it provisioned to `Succeeded` and
+`properties.activationKey` came back as a 360-character value — exactly what
+`awscc_interconnect_connection` redeems.
+
+**Why inspecting a working circuit does not reveal this.** A `GET` on an
+already-paired circuit returns `activationKey` but **no `partnerAccountId`**. It is a
+create-time input, not round-tripped state, so reading a healthy circuit to infer the
+required body actively misleads you — especially if that circuit was built the AWS-first
+way, where the field genuinely was never set.
+
+### Two debugging lessons that cost more than the fix
+
+**Terraform holds diagnostics until the whole apply settles.** The circuit failed at
+19:08:54, but nothing was printed until the ExpressRoute gateway finished ~25 minutes
+later. The tell is in the progress log:
+
+```
+azapi_resource.mci[0]: Creating...          <- and then never again
+azurerm_virtual_network_gateway.ergw: Still creating... [12m50s elapsed]
+```
+
+A resource that says `Creating...` and then **never emits a `Still creating...` line**
+has already finished or failed. Everything still in flight keeps ticking every 10s.
+
+**Read the Azure activity log instead of waiting.** `az monitor activity-log list` gives
+you the real ARM error while the apply is still running, which turns a 25-minute blind
+wait into a 30-second answer. Note `eventTimestamp` comes back as a `DateTime`, not a
+string, so `.Substring()` on it fails.
+
+### The second `create`-mode bug: the pairing is asynchronous on both sides
+
+Fixing `partnerAccountId` exposed the next one. The circuit and the AWS interconnect both
+create in seconds, but the *pairing* does not:
+
+| Time | Event |
+|---|---|
+| 14:47 | Circuit created (15s), `awscc_interconnect_connection` created (14s) |
+| 14:47 | AWS connection `state: pending`, Azure `serviceProviderProvisioningState: Provisioning` |
+| 15:00 | AWS connection reaches `available` |
+| 15:01 | Azure circuit reaches `Provisioned` |
+
+Terraform builds the ExpressRoute connection as soon as the circuit exists, which lands
+squarely inside that ~15 minute window and fails:
+
+```
+ServiceProviderNotProvisioned
+The current cross connection provisioning state 'NotProvisioned' of this
+service key '<guid>' prevents this operation.
+```
+
+**`depends_on` does not fix this.** It orders the API *calls*, and the AWS call returns
+long before the pairing finishes. Something has to actually check the state.
+
+The fix is `data.azapi_resource.mci_state` — a re-read of the circuit that `depends_on`
+the AWS connection — feeding a `precondition` on the ExpressRoute connection. So
+`interconnect_mode = "create"` is a **two-apply flow**: the first apply builds everything
+and stops with a plain-English message, and a second apply ~15 minutes later attaches the
+connection. Nothing needs cleaning up in between.
+
+> **Do not "fix" this with a `local-exec` waiter.** That was tried first and is worse than
+> nothing — see below.
+
+### `az ... wait --custom` is not a trustworthy waiter
+
+The obvious fix was `az network express-route wait --custom "…=='Provisioned'"` in a
+`local-exec`. It fails in two independent ways, and **both failure modes look like
+success**:
+
+| Test | Expected | Actual |
+|---|---|---|
+| `az network express-route wait --custom` with a **true** condition | returns immediately | ran the **full 120s timeout**, exit 0 |
+| same, with an **impossible** condition | non-zero exit | `{}`, **exit 0** |
+| `az resource wait --custom` with a **true** condition | returns immediately | **2s, exit 0** ✅ |
+| `az resource wait --custom` with an **impossible** condition | non-zero exit | `{}`, **exit 0** after timeout |
+
+Two separate lessons:
+
+1. **`az network express-route wait --custom` never matches.** `az resource wait` against
+   the raw ARM JSON (`properties.serviceProviderProvisioningState`) does work — 2s versus
+   a 24s timeout is an unambiguous signal.
+2. **Neither errors on timeout.** They exit 0. A waiter that silently gives up is
+   indistinguishable from one that succeeded, so the apply proceeds and fails anyway.
+
+And on Windows there is a third problem. Terraform's `local-exec` shells out through
+`cmd /C`, and Go escapes embedded quotes as `\"`, which **cmd does not understand**. The
+JMESPath arrives corrupted, the condition never matches, and — because of point 2 — the
+command still exits 0. Verified: the same true condition returned in **2s** run directly
+but took the **full 69s timeout** through `cmd`.
+
+> **Always mutation-test a waiter.** Point it at a condition that can never be true. If it
+> still exits 0, it is not a waiter. A `precondition` was chosen instead precisely because
+> it cannot be silently wrong.
+
+### A third bug, found while recovering: `[0]` breaks `refresh-only`
+
+The documented recovery from a failed apply starts with
+`terraform apply -refresh-only -auto-approve`. That command itself failed:
+
+```
+Error: Invalid index
+  azurerm_virtual_network_gateway_connection.ergw is empty tuple
+```
+
+`outputs.tf` reached into count-gated resources with `var.x ? resource.y[0].name : null`.
+In a refresh-only plan after a partial apply, the resource is declared with `count = 1`
+but has **zero instances in state**, and `[0]` hard-fails — blocking the exact recovery
+procedure it is needed for. Fixed by using `one(resource.y[*].name)`, which yields `null`
+instead. That is already the idiom used elsewhere in this repo; `outputs.tf` was the
+straggler.
+
+## 11. Small things that still cost real time
 
 | Trap | Reality |
 |---|---|
@@ -356,7 +503,7 @@ configuration flag, which is why it is worth writing down as closed.
 | ACI subnet | Must be delegated to `Microsoft.ContainerInstance/containerGroups`, and Microsoft recommends **/24 or larger**. A `/27` works for one small group but is below the documented recommendation. |
 | `draw.io --export` for the SVGs | Three separate traps, all silent. Five Azure icons live inside draw.io's own `app.asar`, so the CLI cannot inline them and writes `file:///C:/Users/<you>/...` refs instead — broken for every other reader, and a local path leaked into git. **`--embed-images` does not fix it.** There is no `--background` flag either; pass one and the colour is treated as a positional input file (`input file/directory not found: #ffffff`), while `-b/--border` is border *width*. And each export salts every gradient id with a fresh 20-char token, so an unchanged diagram still produces a whole-file diff. `scripts/render-diagrams.ps1` handles all three — use it instead of calling `draw.io` directly. |
 
-## 11. What was right from the start
+## 12. What was right from the start
 
 Worth recording so it isn't re-litigated: 
 
@@ -380,6 +527,16 @@ Worth recording so it isn't re-litigated:
   [Why hub/spoke](../README.md#why-hubspoke-instead-of-one-vnet).
 - **Your public IP is auto-detected** via `ifconfig.me` and pinned into the NSG and
   security group. If it changes, re-run `terraform apply` or set `my_public_ip`.
+- **`interconnect_mode = "create"` needs `properties.partnerAccountId`** on the circuit —
+  at the `properties` level, not inside `serviceProviderProperties`. Without it the PUT
+  fails in ~1s, but Terraform will not tell you until the 25-minute gateway finishes.
+- **`create` mode is a two-apply flow.** The provider pairing takes ~15 minutes; the first
+  apply stops on a precondition, the second attaches the ExpressRoute connection.
+- **Never trust `az ... wait --custom`.** It exits 0 on timeout, and
+  `az network express-route wait` never matches at all. Mutation-test any waiter against a
+  condition that cannot be true.
+- **A resource stuck at `Creating...` with no `Still creating...` lines has already
+  failed.** Check `az monitor activity-log list` rather than waiting out the apply.
 - **AWS CLI uses `--output json`, not `-o json`.**
 - **The ExpressRoute gateway takes ~25 min to create.** Timeouts are set to 90m.
 - **`enable_flow_logs` defaults to `false`** — flow logs require storage shared-key
