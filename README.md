@@ -16,6 +16,56 @@
 
 ---
 
+## TL;DR
+
+Private VM-to-VM connectivity between Azure and AWS in **~30 minutes** for **~$177/mo**,
+with **no VPN, no BGP, no VLANs and no partner router**. Terraform builds both landing
+zones; Microsoft and AWS own the underlay in between.
+
+| | |
+|---|---|
+| **What you get** | Two Linux VMs reaching each other on **private IPs only**, ~4 ms East US ⇄ `us-east-1` |
+| **What you need** | An Azure subscription, an AWS account, and an existing [MCI circuit + AWS Interconnect pair](#where-the-interconnect-comes-from) — or let Terraform build one |
+| **Cost** | **~$177/mo**, **~85% of it the ExpressRoute gateway** — [tear it down](#step-4--tear-down) when idle |
+| **Time** | ~30 min, almost all of it the gateway build |
+
+```powershell
+pwsh scripts/00-configure.ps1     # tooling, sign-in, discovery, writes terraform.tfvars
+cd terraform; terraform init; terraform plan -out=tfplan; terraform apply tfplan
+pwsh scripts/02-verify.ps1        # proves the private path end to end
+pwsh scripts/05-latency.ps1       # measures what that path costs in milliseconds
+pwsh scripts/99-destroy.ps1       # when you are done - most of the cost is hourly
+```
+
+**Four things that surprise people:**
+
+- **This is not Megaport or Equinix.** There is no BGP session, VLAN tag, MD5 key or
+  `169.254.x.x` peering to configure. The providers own the underlay, so there is
+  nothing there for you to get wrong.
+- **The link is four parallel links, not one.** The underlay is **4 × ECMP with one BGP
+  session per link**, and you can see them — the AWS prefix is learned **four times**, once
+  per next hop `10.100.0.4` – `.7`, each with `asPath 12076-64512` (Microsoft's ASN, then
+  the DXGW's). Fewer than four rows means links are down: traffic still flows, but the
+  redundancy and throughput headroom are gone.
+
+  ```powershell
+  pwsh scripts/04-routes.ps1                 # both ends, incl. BGP peer status - bash: ./scripts/04-routes.sh
+
+  # or straight from the gateway
+  az network vnet-gateway list-learned-routes  -g rg-mcilab-azure -n ergw-mcilab -o table
+  az network vnet-gateway list-bgp-peer-status -g rg-mcilab-azure -n ergw-mcilab -o table
+  ```
+
+  Annotated healthy output for both clouds: [docs/control-plane.md](docs/control-plane.md).
+- **The gateway is in East US but the VM is in East US 2** — forced, not a preference. A
+  `MultiCloud` circuit is evaluated as a *Local* circuit and attaches only to its peering
+  location, while this subscription has **zero** VM capacity in East US. That split costs
+  **~4 ms, about half** the measured RTT, which is precisely why the
+  [latency probe](#latency-probe) exists.
+- **MTU is 1400** on both VMs. ExpressRoute caps payload there and will not fragment.
+
+---
+
 Two Linux VMs — one in each cloud — talk to each other over **private addresses only**,
 with no VPN, no public hops, and no BGP to configure. Terraform builds both landing zones
 and attaches them to the provider-managed interconnect; four commands take you from an
